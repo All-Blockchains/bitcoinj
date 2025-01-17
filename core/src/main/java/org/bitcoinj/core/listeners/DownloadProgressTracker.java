@@ -17,16 +17,15 @@
 
 package org.bitcoinj.core.listeners;
 
+import org.bitcoinj.base.internal.TimeUtils;
 import org.bitcoinj.core.Block;
 import org.bitcoinj.core.FilteredBlock;
 import org.bitcoinj.core.Peer;
-import org.bitcoinj.core.Utils;
-import org.bitcoinj.utils.ListenableCompletableFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
-import java.util.Date;
+import java.time.Instant;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -68,7 +67,7 @@ public class DownloadProgressTracker implements BlockchainDownloadEventListener 
             caughtUp = true;
             if (lastPercent != 100) {
                 lastPercent = 100;
-                progress(lastPercent, blocksLeft, new Date(block.getTimeSeconds() * 1000));
+                progress(lastPercent, blocksLeft, block.time());
             }
             doneDownload();
             future.complete(peer.getBestHeight());
@@ -80,7 +79,7 @@ public class DownloadProgressTracker implements BlockchainDownloadEventListener 
 
         double pct = 100.0 - (100.0 * (blocksLeft / (double) originalBlocksLeft));
         if ((int) pct != lastPercent) {
-            progress(pct, blocksLeft, new Date(block.getTimeSeconds() * 1000));
+            progress(pct, blocksLeft, block.time());
             lastPercent = (int) pct;
         }
     }
@@ -89,11 +88,11 @@ public class DownloadProgressTracker implements BlockchainDownloadEventListener 
      * Called when download progress is made.
      *
      * @param pct  the percentage of chain downloaded, estimated
-     * @param date the date of the last block downloaded
+     * @param time the time of the last block downloaded
      */
-    protected void progress(double pct, int blocksSoFar, Date date) {
+    protected void progress(double pct, int blocksSoFar, Instant time) {
         log.info(String.format(Locale.US, "Chain download %d%% done with %d blocks to go, block date %s", (int) pct, blocksSoFar,
-                Utils.dateTimeFormat(date)));
+                TimeUtils.dateTimeFormat(time)));
     }
 
     /**
@@ -127,7 +126,7 @@ public class DownloadProgressTracker implements BlockchainDownloadEventListener 
      * Returns a listenable future that completes with the height of the best chain (as reported by the peer) once chain
      * download seems to be finished.
      */
-    public ListenableCompletableFuture<Long> getFuture() {
-        return ListenableCompletableFuture.of(future);
+    public CompletableFuture<Long> getFuture() {
+        return future;
     }
 }

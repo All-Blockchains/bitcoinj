@@ -17,14 +17,14 @@
 package org.bitcoinj.walletfx.application;
 
 import com.google.common.util.concurrent.Service;
+import jakarta.annotation.Nullable;
 import javafx.application.Platform;
 import javafx.scene.input.KeyCombination;
 import javafx.stage.Stage;
 import org.bitcoinj.base.BitcoinNetwork;
 import org.bitcoinj.base.ScriptType;
+import org.bitcoinj.base.internal.PlatformUtils;
 import org.bitcoinj.core.Context;
-import org.bitcoinj.core.NetworkParameters;
-import org.bitcoinj.core.Utils;
 import org.bitcoinj.kits.WalletAppKit;
 import org.bitcoinj.utils.AppDataDirectory;
 import org.bitcoinj.utils.BriefLogFormatter;
@@ -34,7 +34,6 @@ import org.bitcoinj.wallet.KeyChainGroupStructure;
 import org.bitcoinj.walletfx.utils.GuiUtils;
 import wallettemplate.WalletSetPasswordController;
 
-import javax.annotation.Nullable;
 import java.io.File;
 import java.io.IOException;
 
@@ -78,15 +77,6 @@ public abstract class WalletApplication implements AppDelegate {
         return applicationName;
     }
 
-    /**
-     * @return Parameters for network this wallet is running on
-     * @deprecated Use {@link #network} (or {@link NetworkParameters#of} if you really need a {@link NetworkParameters}.)
-     */
-    @Deprecated
-    public NetworkParameters params() {
-        return NetworkParameters.of(network);
-    }
-
     public BitcoinNetwork network() {
         return network;
     }
@@ -118,7 +108,7 @@ public abstract class WalletApplication implements AppDelegate {
         // Make log output concise.
         BriefLogFormatter.init();
 
-        if (Utils.isMac()) {
+        if (PlatformUtils.isMac()) {
             // We could match the Mac Aqua style here, except that (a) Modena doesn't look that bad, and (b)
             // the date picker widget is kinda broken in AquaFx and I can't be bothered fixing it.
             // AquaFx.style();
@@ -188,17 +178,11 @@ public abstract class WalletApplication implements AppDelegate {
     }
 
     protected String suffixFromNetwork(BitcoinNetwork network) {
-        switch(network) {
-            case MAINNET:
-                return "main";
-            case TESTNET:
-                return "test";
-            case SIGNET:
-                return "signet";
-            case REGTEST:
-                return "regtest";
-            default:
-                throw new IllegalArgumentException("Unsupported network");
-        }
+        return switch (network) {
+            case MAINNET -> "main";
+            case TESTNET -> "test";
+            case SIGNET -> "signet";
+            case REGTEST -> "regtest";
+        };
     }
 }

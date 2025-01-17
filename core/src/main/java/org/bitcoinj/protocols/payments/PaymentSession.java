@@ -17,21 +17,19 @@
 package org.bitcoinj.protocols.payments;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.protobuf.InvalidProtocolBufferException;
-import org.bitcoin.protocols.payments.Protos;
-import org.bitcoinj.core.Address;
+import org.bitcoinj.protobuf.payments.Protos;
+import org.bitcoinj.base.Address;
 import org.bitcoinj.base.Coin;
+import org.bitcoinj.base.internal.TimeUtils;
 import org.bitcoinj.core.NetworkParameters;
 import org.bitcoinj.core.Transaction;
 import org.bitcoinj.core.TransactionOutput;
-import org.bitcoinj.core.Utils;
 import org.bitcoinj.crypto.TrustStoreLoader;
 import org.bitcoinj.params.MainNetParams;
 import org.bitcoinj.protocols.payments.PaymentProtocol.PkiVerificationData;
 import org.bitcoinj.uri.BitcoinURI;
-import org.bitcoinj.utils.FutureUtils;
-import org.bitcoinj.utils.ListenableCompletableFuture;
+import org.bitcoinj.base.internal.FutureUtils;
 import org.bitcoinj.utils.Threading;
 import org.bitcoinj.wallet.SendRequest;
 
@@ -44,10 +42,12 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.security.KeyStoreException;
+import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 
 /**
  * <p>Provides a standard implementation of the Payment Protocol (BIP 0070)</p>
@@ -61,7 +61,7 @@ import java.util.concurrent.CompletableFuture;
  * </ul>
  *
  * <p>If initialized with a BitcoinURI or a url, a network request is made for the payment request object and a
- * {@link ListenableCompletableFuture} is returned that will be notified with the PaymentSession object after it is downloaded.</p>
+ * {@link CompletableFuture} is returned that will be notified with the PaymentSession object after it is downloaded.</p>
  *
  * <p>Once the PaymentSession is initialized, typically a wallet application will prompt the user to confirm that the
  * amount and recipient are correct, perform any additional steps, and then construct a list of transactions to pass to
@@ -69,7 +69,7 @@ import java.util.concurrent.CompletableFuture;
  *
  * <p>Call sendPayment with a list of transactions that will be broadcast. A {@link Protos.Payment} message will be sent
  * to the merchant if a payment url is provided in the PaymentRequest. NOTE: sendPayment does NOT broadcast the
- * transactions to the bitcoin network. Instead it returns a ListenableCompletableFuture that will be notified when a
+ * transactions to the bitcoin network. Instead it returns a CompletableFuture that will be notified when a
  * {@link Protos.PaymentACK} is received from the merchant. Typically a wallet will show the message to the user
  * as a confirmation message that the payment is now "processing" or that an error occurred, and then broadcast the
  * tx itself later if needed.</p>
@@ -77,7 +77,7 @@ import java.util.concurrent.CompletableFuture;
  * @see <a href="https://github.com/bitcoin/bips/blob/master/bip-0070.mediawiki">BIP 0070</a>
  */
 public class PaymentSession {
-    private final static ListeningExecutorService executor = Threading.THREAD_POOL;
+    private final static ExecutorService executor = Threading.THREAD_POOL;
     private NetworkParameters params;
     private Protos.PaymentRequest paymentRequest;
     private Protos.PaymentDetails paymentDetails;
@@ -98,7 +98,7 @@ public class PaymentSession {
      * the signature provided by the payment request. An exception is thrown by the future if the signature cannot
      * be verified.</p>
      */
-    public static ListenableCompletableFuture<PaymentSession> createFromBitcoinUri(final BitcoinURI uri) throws PaymentProtocolException {
+    public static CompletableFuture<PaymentSession> createFromBitcoinUri(final BitcoinURI uri) throws PaymentProtocolException {
         return createFromBitcoinUri(uri, true, null);
     }
 
@@ -110,7 +110,7 @@ public class PaymentSession {
      * be used to verify the signature provided by the payment request. An exception is thrown by the future if the
      * signature cannot be verified.
      */
-    public static ListenableCompletableFuture<PaymentSession> createFromBitcoinUri(final BitcoinURI uri, final boolean verifyPki)
+    public static CompletableFuture<PaymentSession> createFromBitcoinUri(final BitcoinURI uri, final boolean verifyPki)
             throws PaymentProtocolException {
         return createFromBitcoinUri(uri, verifyPki, null);
     }
@@ -124,13 +124,13 @@ public class PaymentSession {
      * signature cannot be verified.
      * If trustStoreLoader is null, the system default trust store is used.
      */
-    public static ListenableCompletableFuture<PaymentSession> createFromBitcoinUri(final BitcoinURI uri, final boolean verifyPki, @Nullable final TrustStoreLoader trustStoreLoader)
+    public static CompletableFuture<PaymentSession> createFromBitcoinUri(final BitcoinURI uri, final boolean verifyPki, @Nullable final TrustStoreLoader trustStoreLoader)
             throws PaymentProtocolException {
         String url = uri.getPaymentRequestUrl();
         if (url == null)
             throw new PaymentProtocolException.InvalidPaymentRequestURL("No payment request URL (r= parameter) in BitcoinURI " + uri);
         try {
-            return ListenableCompletableFuture.of(fetchPaymentRequest(new URI(url), verifyPki, trustStoreLoader));
+            return fetchPaymentRequest(new URI(url), verifyPki, trustStoreLoader);
         } catch (URISyntaxException e) {
             throw new PaymentProtocolException.InvalidPaymentRequestURL(e);
         }
@@ -143,7 +143,7 @@ public class PaymentSession {
      * be used to verify the signature provided by the payment request. An exception is thrown by the future if the
      * signature cannot be verified.
      */
-    public static ListenableCompletableFuture<PaymentSession> createFromUrl(final String url) throws PaymentProtocolException {
+    public static CompletableFuture<PaymentSession> createFromUrl(final String url) throws PaymentProtocolException {
         return createFromUrl(url, true, null);
     }
 
@@ -154,7 +154,7 @@ public class PaymentSession {
      * be used to verify the signature provided by the payment request. An exception is thrown by the future if the
      * signature cannot be verified.
      */
-    public static ListenableCompletableFuture<PaymentSession> createFromUrl(final String url, final boolean verifyPki)
+    public static CompletableFuture<PaymentSession> createFromUrl(final String url, final boolean verifyPki)
             throws PaymentProtocolException {
         return createFromUrl(url, verifyPki, null);
     }
@@ -167,12 +167,12 @@ public class PaymentSession {
      * signature cannot be verified.
      * If trustStoreLoader is null, the system default trust store is used.
      */
-    public static ListenableCompletableFuture<PaymentSession> createFromUrl(final String url, final boolean verifyPki, @Nullable final TrustStoreLoader trustStoreLoader)
+    public static CompletableFuture<PaymentSession> createFromUrl(final String url, final boolean verifyPki, @Nullable final TrustStoreLoader trustStoreLoader)
             throws PaymentProtocolException {
         if (url == null)
             throw new PaymentProtocolException.InvalidPaymentRequestURL("null paymentRequestUrl");
         try {
-            return ListenableCompletableFuture.of(fetchPaymentRequest(new URI(url), verifyPki, trustStoreLoader));
+            return fetchPaymentRequest(new URI(url), verifyPki, trustStoreLoader);
         } catch(URISyntaxException e) {
             throw new PaymentProtocolException.InvalidPaymentRequestURL(e);
         }
@@ -253,27 +253,29 @@ public class PaymentSession {
     }
 
     /**
-     * Returns the date that the payment request was generated.
+     * Returns the time that the payment request was generated.
      */
-    public Date getDate() {
-        return new Date(paymentDetails.getTime() * 1000);
+    public Instant time() {
+        return Instant.ofEpochSecond(paymentDetails.getTime());
     }
 
     /**
-     * Returns the expires time of the payment request, or null if none.
+     * Returns the expires time of the payment request, or empty if none.
      */
-    @Nullable public Date getExpires() {
+    public Optional<Instant> expires() {
         if (paymentDetails.hasExpires())
-            return new Date(paymentDetails.getExpires() * 1000);
+            return Optional.of(Instant.ofEpochSecond(paymentDetails.getExpires()));
         else
-            return null;
+            return Optional.empty();
     }
 
     /**
      * This should always be called before attempting to call sendPayment.
      */
     public boolean isExpired() {
-        return paymentDetails.hasExpires() && Utils.currentTimeSeconds() > paymentDetails.getExpires();
+        return expires()
+                .map(time -> TimeUtils.currentTime().isAfter(time))
+                .orElse(false);
     }
 
     /**
@@ -301,9 +303,9 @@ public class PaymentSession {
      * Returns a {@link SendRequest} suitable for broadcasting to the network.
      */
     public SendRequest getSendRequest() {
-        Transaction tx = new Transaction(params);
+        Transaction tx = new Transaction();
         for (Protos.Output output : paymentDetails.getOutputsList())
-            tx.addOutput(new TransactionOutput(params, tx, Coin.valueOf(output.getAmount()), output.getScript().toByteArray()));
+            tx.addOutput(new TransactionOutput(tx, Coin.valueOf(output.getAmount()), output.getScript().toByteArray()));
         return SendRequest.forTx(tx).fromPaymentDetails(paymentDetails);
     }
 
@@ -319,24 +321,24 @@ public class PaymentSession {
      * @param memo is a message to include in the payment message sent to the merchant.
      * @return a future for the PaymentACK
      */
-    public ListenableCompletableFuture<PaymentProtocol.Ack> sendPayment(List<Transaction> txns, @Nullable Address refundAddr, @Nullable String memo) {
+    public CompletableFuture<PaymentProtocol.Ack> sendPayment(List<Transaction> txns, @Nullable Address refundAddr, @Nullable String memo) {
         Protos.Payment payment = null;
         try {
             payment = getPayment(txns, refundAddr, memo);
-        } catch (IOException | PaymentProtocolException.InvalidNetwork e) {
-            return ListenableCompletableFuture.failedFuture(e);
+        } catch (IOException e) {
+            return FutureUtils.failedFuture(e);
         }
         if (payment == null)
-            return ListenableCompletableFuture.failedFuture(new PaymentProtocolException.InvalidPaymentRequestURL("Missing Payment URL"));
+            return FutureUtils.failedFuture(new PaymentProtocolException.InvalidPaymentRequestURL("Missing Payment URL"));
         if (isExpired())
-            return ListenableCompletableFuture.failedFuture(new PaymentProtocolException.Expired("PaymentRequest is expired"));
+            return FutureUtils.failedFuture(new PaymentProtocolException.Expired("PaymentRequest is expired"));
         URL url;
         try {
             url = new URL(paymentDetails.getPaymentUrl());
         } catch (MalformedURLException e) {
-            return ListenableCompletableFuture.failedFuture(new PaymentProtocolException.InvalidPaymentURL(e));
+            return FutureUtils.failedFuture(new PaymentProtocolException.InvalidPaymentURL(e));
         }
-        return ListenableCompletableFuture.of(sendPayment(url, payment));
+        return sendPayment(url, payment);
     }
 
     /**
@@ -349,11 +351,8 @@ public class PaymentSession {
      */
     @Nullable
     public Protos.Payment getPayment(List<Transaction> txns, @Nullable Address refundAddr, @Nullable String memo)
-            throws IOException, PaymentProtocolException.InvalidNetwork {
+            throws IOException {
         if (paymentDetails.hasPaymentUrl()) {
-            for (Transaction tx : txns)
-                if (!tx.getParams().equals(params))
-                    throw new PaymentProtocolException.InvalidNetwork(PaymentProtocol.protocolIdFromParams(params));
             return PaymentProtocol.createPaymentMessage(txns, totalValue, refundAddr, memo, getMerchantData());
         } else {
             return null;

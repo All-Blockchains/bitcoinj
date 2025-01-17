@@ -16,9 +16,8 @@
 
 package org.bitcoinj.crypto;
 
-import org.bitcoinj.base.utils.ByteUtils;
-import org.bitcoinj.core.ECKey;
-import org.bitcoinj.core.Utils;
+import org.bitcoinj.base.internal.TimeUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 import org.bouncycastle.math.ec.ECPoint;
 
 import java.math.BigInteger;
@@ -28,8 +27,8 @@ import java.util.Arrays;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkArgument;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * Implementation of the <a href="https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki">BIP 32</a>
@@ -61,12 +60,14 @@ public final class HDKeyDerivation {
      * @throws IllegalArgumentException if the seed is less than 8 bytes and could be brute forced
      */
     public static DeterministicKey createMasterPrivateKey(byte[] seed) throws HDDerivationException {
-        checkArgument(seed.length > 8, "Seed is too short and could be brute forced");
+        checkArgument(seed.length > 8, () ->
+                "seed is too short and could be brute forced");
         // Calculate I = HMAC-SHA512(key="Bitcoin seed", msg=S)
         byte[] i = HDUtils.hmacSha512(HDUtils.createHmacSha512Digest("Bitcoin seed".getBytes()), seed);
         // Split I into two 32-byte sequences, Il and Ir.
         // Use Il as master secret key, and Ir as master chain code.
-        checkState(i.length == 64, i.length);
+        checkState(i.length == 64, () ->
+                "" + i.length);
         byte[] il = Arrays.copyOfRange(i, 0, 32);
         byte[] ir = Arrays.copyOfRange(i, 32, 64);
         Arrays.fill(i, (byte)0);
@@ -74,7 +75,7 @@ public final class HDKeyDerivation {
         Arrays.fill(il, (byte)0);
         Arrays.fill(ir, (byte)0);
         // Child deterministic keys will chain up to their parents to find the keys.
-        masterPrivKey.setCreationTimeSeconds(Utils.currentTimeSeconds());
+        masterPrivKey.setCreationTime(TimeUtils.currentTime());
         return masterPrivKey;
     }
 
@@ -89,7 +90,7 @@ public final class HDKeyDerivation {
     }
 
     public static DeterministicKey createMasterPubKeyFromBytes(byte[] pubKeyBytes, byte[] chainCode) {
-        return new DeterministicKey(HDPath.M(), chainCode, new LazyECPoint(ECKey.CURVE.getCurve(), pubKeyBytes), null, null);
+        return new DeterministicKey(HDPath.M(), chainCode, new LazyECPoint(pubKeyBytes), null, null);
     }
 
     /**
@@ -137,7 +138,7 @@ public final class HDKeyDerivation {
 
     /**
      * @throws HDDerivationException if private derivation is attempted for a public-only parent key, or
-     * if the resulting derived key is invalid (eg. private key == 0).
+     * if the resulting derived key is invalid (e.g. private key == 0).
      */
     public static DeterministicKey deriveChildKey(DeterministicKey parent, ChildNumber childNumber) throws HDDerivationException {
         if (!parent.hasPrivKey())
@@ -155,9 +156,11 @@ public final class HDKeyDerivation {
 
     public static RawKeyBytes deriveChildKeyBytesFromPrivate(DeterministicKey parent,
                                                               ChildNumber childNumber) throws HDDerivationException {
-        checkArgument(parent.hasPrivKey(), "Parent key must have private key bytes for this method.");
+        checkArgument(parent.hasPrivKey(), () ->
+                "parent key must have private key bytes for this method");
         byte[] parentPublicKey = parent.getPubKeyPoint().getEncoded(true);
-        checkState(parentPublicKey.length == 33, "Parent pubkey must be 33 bytes, but is " + parentPublicKey.length);
+        checkState(parentPublicKey.length == 33, () ->
+                "parent pubkey must be 33 bytes, but is: " + parentPublicKey.length);
         ByteBuffer data = ByteBuffer.allocate(37);
         if (childNumber.isHardened()) {
             data.put(parent.getPrivKeyBytes33());
@@ -166,7 +169,8 @@ public final class HDKeyDerivation {
         }
         data.putInt(childNumber.i());
         byte[] i = HDUtils.hmacSha512(parent.getChainCode(), data.array());
-        checkState(i.length == 64, i.length);
+        checkState(i.length == 64, () ->
+                "" + i.length);
         byte[] il = Arrays.copyOfRange(i, 0, 32);
         byte[] chainCode = Arrays.copyOfRange(i, 32, 64);
         BigInteger ilInt = ByteUtils.bytesToBigInteger(il);
@@ -186,18 +190,21 @@ public final class HDKeyDerivation {
             PublicDeriveMode mode) throws HDDerivationException {
         RawKeyBytes rawKey = deriveChildKeyBytesFromPublic(parent, childNumber, PublicDeriveMode.NORMAL);
         return new DeterministicKey(parent.getPath().extend(childNumber), rawKey.chainCode,
-                new LazyECPoint(ECKey.CURVE.getCurve(), rawKey.keyBytes), null, parent);
+                new LazyECPoint(rawKey.keyBytes), null, parent);
     }
 
     public static RawKeyBytes deriveChildKeyBytesFromPublic(DeterministicKey parent, ChildNumber childNumber, PublicDeriveMode mode) throws HDDerivationException {
-        checkArgument(!childNumber.isHardened(), "Hardened derivation is unsupported (%s).", childNumber);
+        checkArgument(!childNumber.isHardened(), () ->
+                "hardened derivation is unsupported:  " + childNumber);
         byte[] parentPublicKey = parent.getPubKeyPoint().getEncoded(true);
-        checkState(parentPublicKey.length == 33, "Parent pubkey must be 33 bytes, but is " + parentPublicKey.length);
+        checkState(parentPublicKey.length == 33, () ->
+                "parent pubkey must be 33 bytes, but is: " + parentPublicKey.length);
         ByteBuffer data = ByteBuffer.allocate(37);
         data.put(parentPublicKey);
         data.putInt(childNumber.i());
         byte[] i = HDUtils.hmacSha512(parent.getChainCode(), data.array());
-        checkState(i.length == 64, i.length);
+        checkState(i.length == 64, () ->
+                "" + i.length);
         byte[] il = Arrays.copyOfRange(i, 0, 32);
         byte[] chainCode = Arrays.copyOfRange(i, 32, 64);
         BigInteger ilInt = ByteUtils.bytesToBigInteger(il);

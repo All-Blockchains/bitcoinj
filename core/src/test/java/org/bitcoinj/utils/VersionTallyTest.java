@@ -16,12 +16,13 @@
 
 package org.bitcoinj.utils;
 
+import org.bitcoinj.base.BitcoinNetwork;
+import org.bitcoinj.base.internal.TimeUtils;
 import org.bitcoinj.core.BlockChain;
 import org.bitcoinj.core.Context;
 import org.bitcoinj.core.NetworkParameters;
 import org.bitcoinj.core.StoredBlock;
 import org.bitcoinj.core.Transaction;
-import org.bitcoinj.core.Utils;
 import org.bitcoinj.params.TestNet3Params;
 import org.bitcoinj.store.BlockStore;
 import org.bitcoinj.store.BlockStoreException;
@@ -30,6 +31,9 @@ import org.bitcoinj.testing.FakeTxBuilder;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
+
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
@@ -42,7 +46,7 @@ public class VersionTallyTest {
 
     @BeforeClass
     public static void setUpClass() {
-        Utils.resetMocking();
+        TimeUtils.clearMockClock();
     }
 
     @Before
@@ -104,16 +108,16 @@ public class VersionTallyTest {
     @Test
     public void testInitialize() throws BlockStoreException {
         Context.propagate(new Context(100, Transaction.DEFAULT_TX_FEE, false, true));
-        final BlockStore blockStore = new MemoryBlockStore(TESTNET);
-        final BlockChain chain = new BlockChain(TESTNET, blockStore);
+        final BlockStore blockStore = new MemoryBlockStore(TESTNET.getGenesisBlock());
+        final BlockChain chain = new BlockChain(BitcoinNetwork.TESTNET, blockStore);
 
         // Build a historical chain of version 2 blocks
-        long timeSeconds = 1231006505;
+        Instant time = Instant.ofEpochSecond(1231006505);
         StoredBlock chainHead = null;
         for (int height = 0; height < TESTNET.getMajorityWindow(); height++) {
-            chainHead = FakeTxBuilder.createFakeBlock(blockStore, 2, timeSeconds, height).storedBlock;
+            chainHead = FakeTxBuilder.createFakeBlock(blockStore, 2, time, height).storedBlock;
             assertEquals(2, chainHead.getHeader().getVersion());
-            timeSeconds += 60;
+            time = time.plus(1, ChronoUnit.MINUTES);
         }
 
         VersionTally instance = new VersionTally(TESTNET);

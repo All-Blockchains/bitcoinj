@@ -17,16 +17,16 @@
 
 package org.bitcoinj.script;
 
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 
 import javax.annotation.Nullable;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Objects;
 
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 import static org.bitcoinj.script.ScriptOpCodes.OP_0;
 import static org.bitcoinj.script.ScriptOpCodes.OP_1;
 import static org.bitcoinj.script.ScriptOpCodes.OP_16;
@@ -105,44 +105,47 @@ public class ScriptChunk {
         return opcode == OP_PUSHDATA4;
     }
 
+    /**
+     * @deprecated Use {@link #toByteArray()}
+     */
+    @Deprecated
     public void write(OutputStream stream) throws IOException {
+        stream.write(toByteArray());
+    }
+
+    private void write(ByteBuffer buf) {
         if (isOpCode()) {
             checkState(data == null);
-            stream.write(opcode);
+            buf.put((byte) opcode);
         } else if (data != null) {
             if (opcode < OP_PUSHDATA1) {
                 checkState(data.length == opcode);
-                stream.write(opcode);
+                buf.put((byte) opcode);
             } else if (opcode == OP_PUSHDATA1) {
                 checkState(data.length <= 0xFF);
-                stream.write(OP_PUSHDATA1);
-                stream.write(data.length);
+                buf.put((byte) OP_PUSHDATA1);
+                buf.put((byte) data.length);
             } else if (opcode == OP_PUSHDATA2) {
                 checkState(data.length <= 0xFFFF);
-                stream.write(OP_PUSHDATA2);
-                ByteUtils.uint16ToByteStreamLE(data.length, stream);
+                buf.put((byte) OP_PUSHDATA2);
+                ByteUtils.writeInt16LE(data.length, buf);
             } else if (opcode == OP_PUSHDATA4) {
                 checkState(data.length <= Script.MAX_SCRIPT_ELEMENT_SIZE);
-                stream.write(OP_PUSHDATA4);
-                ByteUtils.uint32ToByteStreamLE(data.length, stream);
+                buf.put((byte) OP_PUSHDATA4);
+                ByteUtils.writeInt32LE(data.length, buf);
             } else {
                 throw new RuntimeException("Unimplemented");
             }
-            stream.write(data);
+            buf.put(data);
         } else {
-            stream.write(opcode); // smallNum
+            buf.put((byte) opcode); // smallNum
         }
     }
 
     public byte[] toByteArray() {
-        ByteArrayOutputStream stream = new ByteArrayOutputStream();
-        try {
-            write(stream);
-        } catch (IOException e) {
-            // Should not happen as ByteArrayOutputStream does not throw IOException on write
-            throw new RuntimeException(e);
-        }
-        return stream.toByteArray();
+        ByteBuffer buf = ByteBuffer.allocate(size());
+        write(buf);
+        return buf.array();
     }
 
     /*
@@ -165,7 +168,7 @@ public class ScriptChunk {
     public String toString() {
         if (data == null)
             return getOpCodeName(opcode);
-        return String.format("%s[%s]", getPushDataName(opcode), ByteUtils.HEX.encode(data));
+        return String.format("%s[%s]", getPushDataName(opcode), ByteUtils.formatHex(data));
     }
 
     @Override

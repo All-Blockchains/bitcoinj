@@ -17,16 +17,21 @@
 
 package org.bitcoinj.examples;
 
+import org.bitcoinj.base.BitcoinNetwork;
+import org.bitcoinj.base.Network;
 import org.bitcoinj.base.Sha256Hash;
-import org.bitcoinj.core.*;
+import org.bitcoinj.core.Block;
+import org.bitcoinj.core.BlockChain;
+import org.bitcoinj.core.NetworkParameters;
+import org.bitcoinj.core.Peer;
+import org.bitcoinj.core.PeerAddress;
+import org.bitcoinj.core.PeerGroup;
 import org.bitcoinj.net.discovery.DnsDiscovery;
-import org.bitcoinj.params.TestNet3Params;
 import org.bitcoinj.store.BlockStore;
 import org.bitcoinj.store.MemoryBlockStore;
 import org.bitcoinj.utils.BriefLogFormatter;
 import picocli.CommandLine;
 
-import java.net.InetAddress;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Future;
 
@@ -55,14 +60,15 @@ public class FetchBlock implements Callable<Integer> {
     public Integer call() throws Exception {
         // Connect to testnet and find a peer
         System.out.println("Connecting to node");
-        final NetworkParameters params = TestNet3Params.get();
-        BlockStore blockStore = new MemoryBlockStore(params);
-        BlockChain chain = new BlockChain(params, blockStore);
-        PeerGroup peerGroup = new PeerGroup(params, chain);
+        final Network network = BitcoinNetwork.TESTNET;
+        final NetworkParameters params = NetworkParameters.of(network);
+        BlockStore blockStore = new MemoryBlockStore(params.getGenesisBlock());
+        BlockChain chain = new BlockChain(network, blockStore);
+        PeerGroup peerGroup = new PeerGroup(network, chain);
         if (localhost) {
-            peerGroup.addPeerDiscovery(new DnsDiscovery(params));
+            peerGroup.addPeerDiscovery(new DnsDiscovery(network));
         } else {
-            PeerAddress addr = new PeerAddress(params, InetAddress.getLocalHost());
+            PeerAddress addr = PeerAddress.localhost(params);
             peerGroup.addAddress(addr);
         }
         peerGroup.start();

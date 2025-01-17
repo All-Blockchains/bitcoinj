@@ -17,14 +17,13 @@
 package org.bitcoinj.utils;
 
 import com.google.common.util.concurrent.CycleDetectingLockFactory;
-import com.google.common.util.concurrent.ListeningExecutorService;
-import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.Uninterruptibles;
-import org.bitcoinj.core.Utils;
+import org.bitcoinj.base.internal.PlatformUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
@@ -89,7 +88,7 @@ public class Threading {
         // 10,000 pending tasks is entirely arbitrary and may or may not be appropriate for the device we're
         // running on.
         public static int WARNING_THRESHOLD = 10000;
-        private final LinkedBlockingQueue<Runnable> tasks;
+        private final BlockingQueue<Runnable> tasks;
 
         public UserThread() {
             super("bitcoinj user thread");
@@ -151,7 +150,7 @@ public class Threading {
     }
 
     public static ReentrantLock lock(String name) {
-        if (Utils.isAndroidRuntime())
+        if (PlatformUtils.isAndroidRuntime())
             return new ReentrantLock(true);
         else
             return factory.newReentrantLock(name);
@@ -185,12 +184,10 @@ public class Threading {
     /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
     /** A caching thread pool that creates daemon threads, which won't keep the JVM alive waiting for more work. */
-    public static ListeningExecutorService THREAD_POOL = MoreExecutors.listeningDecorator(
-            Executors.newCachedThreadPool(r -> {
-                Thread t = new Thread(r);
-                t.setName("Threading.THREAD_POOL worker");
-                t.setDaemon(true);
-                return t;
-            })
-    );
+    public static ExecutorService THREAD_POOL = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r);
+        t.setName("Threading.THREAD_POOL worker");
+        t.setDaemon(true);
+        return t;
+    });
 }

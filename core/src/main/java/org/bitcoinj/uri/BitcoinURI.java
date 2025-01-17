@@ -16,13 +16,12 @@
 
 package org.bitcoinj.uri;
 
+import org.bitcoinj.base.AddressParser;
 import org.bitcoinj.base.BitcoinNetwork;
 import org.bitcoinj.base.Network;
 import org.bitcoinj.base.exceptions.AddressFormatException;
 import org.bitcoinj.base.Coin;
-import org.bitcoinj.core.Address;
-import org.bitcoinj.core.DefaultAddressParser;
-import org.bitcoinj.core.NetworkParameters;
+import org.bitcoinj.base.Address;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -36,8 +35,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-
-import static com.google.common.base.Preconditions.checkNotNull;
+import java.util.Objects;
 
 /**
  * <p>Provides a standard implementation of a Bitcoin URI with support for the following:</p>
@@ -107,39 +105,28 @@ public class BitcoinURI {
      * @param uri The raw URI data to be parsed (see class comments for accepted formats)
      * @throws BitcoinURIParseException if the URI is not syntactically or semantically valid.
      */
-    public BitcoinURI(String uri) throws BitcoinURIParseException {
+    public static BitcoinURI of(String uri) throws BitcoinURIParseException {
         // TODO: Discover (via Service Loader mechanism) the correct Network from the URI string
-        this(BitcoinNetwork.MAINNET, uri);
+        return new BitcoinURI(uri, null);
     }
 
     /**
      * Constructs a new object by trying to parse the input as a valid Bitcoin URI.
      *
-     * @param params The network parameters that determine which network the URI is from, or null if you don't have
-     *               any expectation about what network the URI is for and wish to check yourself.
-     * @param input The raw URI data to be parsed (see class comments for accepted formats)
-     *
-     * @throws BitcoinURIParseException If the input fails Bitcoin URI syntax and semantic checks.
-     * @deprecated Use {@link BitcoinURI#BitcoinURI(Network, String)} or {@link BitcoinURI#BitcoinURI(String)}
-     */
-    @Deprecated
-    public BitcoinURI(@Nullable NetworkParameters params, String input) throws BitcoinURIParseException {
-        this(params != null ? params.network() : BitcoinNetwork.MAINNET, input);
-    }
-
-    /**
-     * Constructs a new object by trying to parse the input as a valid Bitcoin URI.
-     *
+     * @param uri     The raw URI data to be parsed (see class comments for accepted formats)
      * @param network The network the URI is from
-     * @param input The raw URI data to be parsed (see class comments for accepted formats)
-     *
      * @throws BitcoinURIParseException If the input fails Bitcoin URI syntax and semantic checks.
      */
-    public BitcoinURI(@Nonnull Network network, String input) throws BitcoinURIParseException {
-        checkNotNull(network);
-        checkNotNull(input);
+    public static BitcoinURI of(String uri, @Nonnull Network network) throws BitcoinURIParseException {
+        return new BitcoinURI(uri, Objects.requireNonNull(network));
+    }
 
-        String scheme = network.uriScheme();
+    private BitcoinURI(String input, @Nullable Network network) throws BitcoinURIParseException {
+        Objects.requireNonNull(input);
+
+        String scheme = network != null ?
+                network.uriScheme() :
+                BitcoinNetwork.BITCOIN_SCHEME;
 
         // Attempt to form the URI (fail fast syntax checking to official standards).
         URI uri;
@@ -186,12 +173,15 @@ public class BitcoinURI {
         }
 
         // Attempt to parse the rest of the URI parameters.
-        parseParameters(network, addressToken, nameValuePairTokens);
+        parseParameters(nameValuePairTokens);
 
         if (!addressToken.isEmpty()) {
             // Attempt to parse the addressToken as a Bitcoin address for this network
             try {
-                Address address = new DefaultAddressParser().parseAddress(addressToken, (BitcoinNetwork) network);
+                AddressParser parser = network != null
+                        ? AddressParser.getDefault(network)
+                        : AddressParser.getDefault();
+                Address address = parser.parseAddress(addressToken);
                 putWithValidation(FIELD_ADDRESS, address);
             } catch (final AddressFormatException e) {
                 throw new BitcoinURIParseException("Bad address", e);
@@ -204,11 +194,10 @@ public class BitcoinURI {
     }
 
     /**
-     * @param network The network
      * @param nameValuePairTokens The tokens representing the name value pairs (assumed to be
      *                            separated by '=' e.g. 'amount=0.2')
      */
-    private void parseParameters(Network network, String addressToken, String[] nameValuePairTokens) throws BitcoinURIParseException {
+    private void parseParameters(String[] nameValuePairTokens) throws BitcoinURIParseException {
         // Attempt to decode the rest of the tokens into a parameter map.
         for (String nameValuePairToken : nameValuePairTokens) {
             final int sepIndex = nameValuePairToken.indexOf('=');
@@ -226,15 +215,11 @@ public class BitcoinURI {
                 // Decode the amount (contains an optional decimal component to 8dp).
                 try {
                     Coin amount = Coin.parseCoin(valueToken);
-                    if (network.exceedsMaxMoney(amount))
-                        throw new BitcoinURIParseException("Max number of coins exceeded");
                     if (amount.signum() < 0)
-                        throw new ArithmeticException("Negative coins specified");
+                        throw new OptionalFieldValidationException("negative amount not allowed: " + valueToken);
                     putWithValidation(FIELD_AMOUNT, amount);
                 } catch (IllegalArgumentException e) {
-                    throw new OptionalFieldValidationException(String.format(Locale.US, "'%s' is not a valid amount", valueToken), e);
-                } catch (ArithmeticException e) {
-                    throw new OptionalFieldValidationException(String.format(Locale.US, "'%s' has too many decimal places", valueToken), e);
+                    throw new OptionalFieldValidationException("not a valid amount: " + valueToken, e);
                 }
             } else {
                 if (nameToken.startsWith("req-")) {
@@ -369,25 +354,6 @@ public class BitcoinURI {
     /**
      * Simple Bitcoin URI builder using known good fields.
      *
-     * @param params The network parameters that determine which network the URI
-     * is for.
-     * @param address The Bitcoin address
-     * @param amount The amount
-     * @param label A label
-     * @param message A message
-     * @return A String containing the Bitcoin URI
-     * @deprecated Use {@link #convertToBitcoinURI(Network, String, Coin, String, String)}
-     */
-    @Deprecated
-    public static String convertToBitcoinURI(NetworkParameters params,
-                                             String address, @Nullable Coin amount,
-                                             @Nullable String label, @Nullable String message) {
-        return convertToBitcoinURI(params.network(), address, amount, label, message);
-    }
-
-    /**
-     * Simple Bitcoin URI builder using known good fields.
-     *
      * @param network The network the URI is for.
      * @param address The Bitcoin address
      * @param amount The amount
@@ -398,8 +364,8 @@ public class BitcoinURI {
     public static String convertToBitcoinURI(Network network,
                                              String address, @Nullable Coin amount,
                                              @Nullable String label, @Nullable String message) {
-        checkNotNull(network);
-        checkNotNull(address);
+        Objects.requireNonNull(network);
+        Objects.requireNonNull(address);
         if (amount != null && amount.signum() < 0) {
             throw new IllegalArgumentException("Coin must be positive");
         }

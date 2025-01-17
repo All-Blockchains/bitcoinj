@@ -34,6 +34,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.ListIterator;
@@ -45,7 +46,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * <p>A FullPrunedBlockChain works in conjunction with a {@link FullPrunedBlockStore} to verify all the rules of the
@@ -72,15 +73,14 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
      * {@link Wallet#loadFromFile(File, WalletExtension...)}
      */
     public FullPrunedBlockChain(NetworkParameters params, Wallet wallet, FullPrunedBlockStore blockStore) throws BlockStoreException {
-        this(params, new ArrayList<Wallet>(), blockStore);
-        addWallet(wallet);
+        this(params, Collections.singletonList(wallet), blockStore);
     }
 
     /**
      * Constructs a block chain connected to the given store.
      */
     public FullPrunedBlockChain(NetworkParameters params, FullPrunedBlockStore blockStore) throws BlockStoreException {
-        this(params, new ArrayList<Wallet>(), blockStore);
+        this(params, Collections.emptyList(), blockStore);
     }
 
     /**
@@ -157,7 +157,7 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
             try {
                 ListIterator<Script> prevOutIt = prevOutScripts.listIterator();
                 for (int index = 0; index < tx.getInputs().size(); index++) {
-                    tx.getInputs().get(index).getScriptSig().correctlySpends(tx, index, null, null, prevOutIt.next(),
+                    tx.getInput(index).getScriptSig().correctlySpends(tx, index, null, null, prevOutIt.next(),
                             verifyFlags);
                 }
             } catch (VerificationException e) {
@@ -172,9 +172,9 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
      */
     private Script getScript(byte[] scriptBytes) {
         try {
-            return new Script(scriptBytes);
+            return Script.parse(scriptBytes);
         } catch (Exception e) {
-            return new Script(new byte[0]);
+            return Script.parse(new byte[0]);
         }
     }
 
@@ -188,7 +188,7 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
         String address = "";
         try {
             if (script != null) {
-                address = script.getToAddress(params, true).toString();
+                address = script.getToAddress(params.network(), true).toString();
             }
         } catch (Exception e) {
         }
@@ -242,9 +242,9 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
                     // For each input of the transaction remove the corresponding output from the set of unspent
                     // outputs.
                     for (int index = 0; index < tx.getInputs().size(); index++) {
-                        TransactionInput in = tx.getInputs().get(index);
-                        UTXO prevOut = blockStore.getTransactionOutput(in.getOutpoint().getHash(),
-                                in.getOutpoint().getIndex());
+                        TransactionInput in = tx.getInput(index);
+                        UTXO prevOut = blockStore.getTransactionOutput(in.getOutpoint().hash(),
+                                in.getOutpoint().index());
                         if (prevOut == null)
                             throw new VerificationException("Attempted to spend a non-existent or already spent output!");
                         // Coinbases can't be spent until they mature, to avoid re-orgs destroying entire transaction
@@ -373,9 +373,9 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
 
                     if (!isCoinBase) {
                         for (int index = 0; index < tx.getInputs().size(); index++) {
-                            final TransactionInput in = tx.getInputs().get(index);
-                            final UTXO prevOut = blockStore.getTransactionOutput(in.getOutpoint().getHash(),
-                                    in.getOutpoint().getIndex());
+                            final TransactionInput in = tx.getInput(index);
+                            final UTXO prevOut = blockStore.getTransactionOutput(in.getOutpoint().hash(),
+                                    in.getOutpoint().index());
                             if (prevOut == null)
                                 throw new VerificationException("Attempted spend of a non-existent or already spent output!");
                             if (prevOut.isCoinbase() && newBlock.getHeight() - prevOut.getHeight() < params.getSpendableCoinbaseDepth())

@@ -18,8 +18,8 @@ package org.bitcoinj.net;
 
 import com.google.common.base.Throwables;
 import org.bitcoinj.core.Message;
-import org.bitcoinj.utils.ListenableCompletableFuture;
 import org.bitcoinj.utils.Threading;
+import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
@@ -33,11 +33,12 @@ import java.nio.channels.SocketChannel;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.locks.ReentrantLock;
 
-import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 // TODO: The locking in all this class is horrible and not really necessary. We should just run all network stuff on one thread.
 
@@ -46,7 +47,7 @@ import static com.google.common.base.Preconditions.checkState;
  * Used only by the NioClient and NioServer classes
  */
 class ConnectionHandler implements MessageWriteTarget {
-    private static final org.slf4j.Logger log = LoggerFactory.getLogger(ConnectionHandler.class);
+    private static final Logger log = LoggerFactory.getLogger(ConnectionHandler.class);
     // We lock when touching local flags and when writing data, but NEVER when calling any methods which leave this
     // class into non-Java classes.
     private final ReentrantLock lock = Threading.lock(ConnectionHandler.class);
@@ -67,9 +68,9 @@ class ConnectionHandler implements MessageWriteTarget {
 
     private static class BytesAndFuture {
         public final ByteBuffer bytes;
-        public final ListenableCompletableFuture<Void> future;
+        public final CompletableFuture<Void> future;
 
-        public BytesAndFuture(ByteBuffer bytes, ListenableCompletableFuture<Void> future) {
+        public BytesAndFuture(ByteBuffer bytes, CompletableFuture<Void> future) {
             this.bytes = bytes;
             this.future = future;
         }
@@ -85,19 +86,19 @@ class ConnectionHandler implements MessageWriteTarget {
 
     private ConnectionHandler(@Nullable StreamConnection connection, SelectionKey key) {
         this.key = key;
-        this.channel = checkNotNull(((SocketChannel)key.channel()));
+        this.channel = Objects.requireNonNull(((SocketChannel)key.channel()));
         if (connection == null) {
             readBuff = null;
             return;
         }
         this.connection = connection;
         readBuff = ByteBuffer.allocateDirect(Math.min(Math.max(connection.getMaxMessageSize(), BUFFER_SIZE_LOWER_BOUND), BUFFER_SIZE_UPPER_BOUND));
-        connection.setWriteTarget(this); // May callback into us (eg closeConnection() now)
+        connection.setWriteTarget(this); // May callback into us (e.g. closeConnection() now)
         connectedHandlers = null;
     }
 
     public ConnectionHandler(StreamConnection connection, SelectionKey key, Set<ConnectionHandler> connectedHandlers) {
-        this(checkNotNull(connection), key);
+        this(Objects.requireNonNull(connection), key);
 
         // closeConnection() may have already happened because we invoked the other c'tor above, which called
         // connection.setWriteTarget which might have re-entered already. In this case we shouldn't add ourselves
@@ -147,7 +148,7 @@ class ConnectionHandler implements MessageWriteTarget {
     }
 
     @Override
-    public ListenableCompletableFuture<Void> writeBytes(byte[] message) throws IOException {
+    public CompletableFuture<Void> writeBytes(byte[] message) throws IOException {
         boolean andUnlock = true;
         lock.lock();
         try {
@@ -160,7 +161,7 @@ class ConnectionHandler implements MessageWriteTarget {
                 throw new IOException("Outbound buffer overflowed");
             // Just dump the message onto the write buffer and call tryWriteBytes
             // TODO: Kill the needless message duplication when the write completes right away
-            final ListenableCompletableFuture<Void> future = new ListenableCompletableFuture<>();
+            final CompletableFuture<Void> future = new CompletableFuture<>();
             bytesToWrite.offer(new BytesAndFuture(ByteBuffer.wrap(Arrays.copyOf(message, message.length)), future));
             bytesToWriteRemaining += message.length;
             setWriteOps();
@@ -235,7 +236,7 @@ class ConnectionHandler implements MessageWriteTarget {
                 // "flip" the buffer - setting the limit to the current position and setting position to 0
                 ((Buffer) handler.readBuff).flip();
                 // Use connection.receiveBytes's return value as a check that it stopped reading at the right location
-                int bytesConsumed = checkNotNull(handler.connection).receiveBytes(handler.readBuff);
+                int bytesConsumed = Objects.requireNonNull(handler.connection).receiveBytes(handler.readBuff);
                 checkState(handler.readBuff.position() == bytesConsumed);
                 // Now drop the bytes which were read by compacting readBuff (resetting limit and keeping relative
                 // position)
@@ -244,7 +245,7 @@ class ConnectionHandler implements MessageWriteTarget {
             if (key.isWritable())
                 handler.tryWriteBytes();
         } catch (Exception e) {
-            // This can happen eg if the channel closes while the thread is about to get killed
+            // This can happen e.g. if the channel closes while the thread is about to get killed
             // (ClosedByInterruptException), or if handler.connection.receiveBytes throws something
             Throwable t = Throwables.getRootCause(e);
             log.warn("Error handling SelectionKey: {} {}", t.getClass().getName(), t.getMessage() != null ? t.getMessage() : "", e);

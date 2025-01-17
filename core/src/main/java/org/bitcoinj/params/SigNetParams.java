@@ -17,11 +17,13 @@
 package org.bitcoinj.params;
 
 import org.bitcoinj.base.BitcoinNetwork;
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 import org.bitcoinj.core.Block;
 import org.bitcoinj.base.Sha256Hash;
 
-import static com.google.common.base.Preconditions.checkState;
+import java.time.Instant;
+
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * <p>Parameters for the signet, a separate public instance of Bitcoin that has relaxed rules suitable for development
@@ -33,7 +35,7 @@ public class SigNetParams extends BitcoinNetworkParams {
     public static final int TESTNET_MAJORITY_REJECT_BLOCK_OUTDATED = 75;
     public static final int TESTNET_MAJORITY_ENFORCE_BLOCK_UPGRADE = 51;
     private static final long GENESIS_DIFFICULTY = 0x1e0377ae;
-    private static final long GENESIS_TIME = 1598918400;
+    private static final Instant GENESIS_TIME = Instant.ofEpochSecond(1598918400);
     private static final long GENESIS_NONCE = 52613770;
     private static final Sha256Hash GENESIS_HASH = Sha256Hash.wrap("00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6");
 
@@ -77,11 +79,9 @@ public class SigNetParams extends BitcoinNetworkParams {
     public Block getGenesisBlock() {
         synchronized (GENESIS_HASH) {
             if (genesisBlock == null) {
-                genesisBlock = Block.createGenesis(this);
-                genesisBlock.setDifficultyTarget(GENESIS_DIFFICULTY);
-                genesisBlock.setTime(GENESIS_TIME);
-                genesisBlock.setNonce(GENESIS_NONCE);
-                checkState(genesisBlock.getHash().equals(GENESIS_HASH), "Invalid genesis hash");
+                genesisBlock = Block.createGenesis(GENESIS_TIME, GENESIS_DIFFICULTY, GENESIS_NONCE);
+                checkState(genesisBlock.getHash().equals(GENESIS_HASH), () ->
+                        "invalid genesis hash");
             }
         }
         return genesisBlock;

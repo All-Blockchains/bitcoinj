@@ -17,11 +17,12 @@
 
 package org.bitcoinj.crypto;
 
-import com.google.common.base.Stopwatch;
 import org.bitcoinj.base.Sha256Hash;
-import org.bitcoinj.base.utils.StreamUtils;
-import org.bitcoinj.core.Utils;
-import org.bitcoinj.core.internal.InternalUtils;
+import org.bitcoinj.base.internal.PlatformUtils;
+import org.bitcoinj.base.internal.Stopwatch;
+import org.bitcoinj.base.internal.TimeUtils;
+import org.bitcoinj.base.internal.StreamUtils;
+import org.bitcoinj.base.internal.InternalUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,12 +33,15 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
-import static com.google.common.base.Preconditions.checkNotNull;
-import static org.bitcoinj.base.utils.ByteUtils.HEX;
+import org.bitcoinj.base.internal.ByteUtils;
+
+import static org.bitcoinj.base.internal.Preconditions.checkArgument;
 
 /**
  * A MnemonicCode object may be used to convert between binary seed values and
@@ -54,7 +58,13 @@ public class MnemonicCode {
     private static final String BIP39_ENGLISH_SHA256 = "ad90bf3beb7b0eb7e5acd74727dc0da96e0a280a258354e7293fb7e211ac03db";
 
     /** UNIX time for when the BIP39 standard was finalised. This can be used as a default seed birthday. */
-    public static long BIP39_STANDARDISATION_TIME_SECS = 1381276800;
+    public static final Instant BIP39_STANDARDISATION_TIME = Instant.ofEpochSecond(1369267200);
+
+    /**
+     * @deprecated Use {@link #BIP39_STANDARDISATION_TIME}
+     */
+    @Deprecated
+    public static final int BIP39_STANDARDISATION_TIME_SECS = Math.toIntExact(BIP39_STANDARDISATION_TIME.getEpochSecond());
 
     private static final int PBKDF2_ROUNDS = 2048;
 
@@ -65,7 +75,7 @@ public class MnemonicCode {
             INSTANCE = new MnemonicCode();
         } catch (FileNotFoundException e) {
             // We expect failure on Android. The developer has to set INSTANCE themselves.
-            if (!Utils.isAndroidRuntime())
+            if (!PlatformUtils.isAndroidRuntime())
                 log.error("Could not find word list", e);
         } catch (IOException e) {
             log.error("Failed to load word list", e);
@@ -106,7 +116,7 @@ public class MnemonicCode {
         // If a wordListDigest is supplied check to make sure it matches.
         if (wordListDigest != null) {
             byte[] digest = md.digest();
-            String hexdigest = HEX.encode(digest);
+            String hexdigest = ByteUtils.formatHex(digest);
             if (!hexdigest.equals(wordListDigest))
                 throw new IllegalArgumentException("wordlist digest mismatch");
         }
@@ -124,21 +134,20 @@ public class MnemonicCode {
      * Convert mnemonic word list to seed.
      */
     public static byte[] toSeed(List<String> words, String passphrase) {
-        checkNotNull(passphrase, "A null passphrase is not allowed.");
+        Objects.requireNonNull(passphrase, "A null passphrase is not allowed.");
 
         // To create binary seed from mnemonic, we use PBKDF2 function
         // with mnemonic sentence (in UTF-8) used as a password and
         // string "mnemonic" + passphrase (again in UTF-8) used as a
-        // salt. Iteration count is set to 4096 and HMAC-SHA512 is
+        // salt. Iteration count is set to 2048 and HMAC-SHA512 is
         // used as a pseudo-random function. Desired length of the
         // derived key is 512 bits (= 64 bytes).
         //
         String pass = InternalUtils.SPACE_JOINER.join(words);
         String salt = "mnemonic" + passphrase;
 
-        final Stopwatch watch = Stopwatch.createStarted();
+        Stopwatch watch = Stopwatch.start();
         byte[] seed = PBKDF2SHA512.derive(pass, salt, PBKDF2_ROUNDS, 64);
-        watch.stop();
         log.info("PBKDF2 took {}", watch);
         return seed;
     }
@@ -195,13 +204,13 @@ public class MnemonicCode {
 
     /**
      * Convert entropy data to mnemonic word list.
+     * @param entropy entropy bits, length must be a multiple of 32 bits
      */
-    public List<String> toMnemonic(byte[] entropy) throws MnemonicException.MnemonicLengthException {
-        if (entropy.length % 4 > 0)
-            throw new MnemonicException.MnemonicLengthException("Entropy length not multiple of 32 bits.");
-
-        if (entropy.length == 0)
-            throw new MnemonicException.MnemonicLengthException("Entropy is empty.");
+    public List<String> toMnemonic(byte[] entropy) {
+        checkArgument(entropy.length % 4 == 0, () ->
+                "entropy length not multiple of 32 bits");
+        checkArgument(entropy.length > 0, () ->
+                "entropy is empty");
 
         // We take initial entropy of ENT bits and compute its
         // checksum by taking first ENT / 32 bits of its SHA256 hash.

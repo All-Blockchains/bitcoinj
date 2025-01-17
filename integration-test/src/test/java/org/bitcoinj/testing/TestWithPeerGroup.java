@@ -16,16 +16,14 @@
 
 package org.bitcoinj.testing;
 
-import com.google.common.base.Preconditions;
-import com.google.common.util.concurrent.ListeningScheduledExecutorService;
-import com.google.common.util.concurrent.MoreExecutors;
+import org.bitcoinj.base.internal.TimeUtils;
 import org.bitcoinj.core.BloomFilter;
 import org.bitcoinj.core.MemoryPoolMessage;
-import org.bitcoinj.core.NetworkParameters;
 import org.bitcoinj.core.Peer;
 import org.bitcoinj.core.PeerGroup;
+import org.bitcoinj.core.ProtocolVersion;
 import org.bitcoinj.core.SendAddrV2Message;
-import org.bitcoinj.core.Utils;
+import org.bitcoinj.core.Services;
 import org.bitcoinj.core.VersionAck;
 import org.bitcoinj.core.VersionMessage;
 import org.bitcoinj.net.BlockingClientManager;
@@ -39,13 +37,15 @@ import org.junit.rules.Timeout;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.time.Duration;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkArgument;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * You can derive from this class and call peerGroup.start() in your tests to get a functional PeerGroup that can be
@@ -70,7 +70,7 @@ public class TestWithPeerGroup extends TestWithNetworkConnections {
 
     @Override
     public void setUp() throws Exception {
-        setUp(new MemoryBlockStore(UNITTEST));
+        setUp(new MemoryBlockStore(UNITTEST.getGenesisBlock()));
     }
 
     @Override
@@ -79,9 +79,9 @@ public class TestWithPeerGroup extends TestWithNetworkConnections {
 
         remoteVersionMessage = new VersionMessage(UNITTEST, 1);
         remoteVersionMessage.localServices =
-                VersionMessage.NODE_NETWORK | VersionMessage.NODE_BLOOM | VersionMessage.NODE_WITNESS;
+                Services.of(Services.NODE_NETWORK | Services.NODE_BLOOM | Services.NODE_WITNESS);
         remoteVersionMessage.clientVersion =
-                NetworkParameters.ProtocolVersion.WITNESS_VERSION.getBitcoinProtocolVersion();
+                ProtocolVersion.WITNESS_VERSION.intValue();
         blockJobs = false;
         initPeerGroup();
     }
@@ -112,28 +112,28 @@ public class TestWithPeerGroup extends TestWithNetworkConnections {
     protected final Semaphore jobBlocks = new Semaphore(0);
 
     private PeerGroup createPeerGroup(final ClientConnectionManager manager) {
-        return new PeerGroup(UNITTEST, blockChain, manager) {
+        return new PeerGroup(UNITTEST, blockChain, manager, PeerGroup.DEFAULT_BLOOM_FILTER_FP_RATE) {
             @Override
-            protected ListeningScheduledExecutorService createPrivateExecutor() {
-                return MoreExecutors.listeningDecorator(new ScheduledThreadPoolExecutor(1, new ContextPropagatingThreadFactory("PeerGroup test thread")) {
+            protected ScheduledExecutorService createPrivateExecutor() {
+                return new ScheduledThreadPoolExecutor(1, new ContextPropagatingThreadFactory("PeerGroup test thread")) {
                     @Override
                     public ScheduledFuture<?> schedule(final Runnable command, final long delay, final TimeUnit unit) {
                         if (!blockJobs)
                             return super.schedule(command, delay, unit);
                         return super.schedule(() -> {
-                            Utils.rollMockClockMillis(unit.toMillis(delay));
+                            TimeUtils.rollMockClock(Duration.ofMillis(unit.toMillis(delay)));
                             command.run();
                             jobBlocks.acquireUninterruptibly();
                         }, 0 /* immediate */, unit);
                     }
-                });
+                };
             }
         };
     }
 
     protected InboundMessageQueuer connectPeerWithoutVersionExchange(int id) throws Exception {
-        Preconditions.checkArgument(id < PEER_SERVERS);
-        InetSocketAddress remoteAddress = new InetSocketAddress(InetAddress.getLoopbackAddress(), 2000 + id);
+        checkArgument(id < PEER_SERVERS);
+        InetSocketAddress remoteAddress = new InetSocketAddress(InetAddress.getLoopbackAddress(), TCP_PORT_BASE + id);
         Peer peer = peerGroup.connectTo(remoteAddress).getConnectionOpenFuture().get();
         InboundMessageQueuer writeTarget = newPeerWriteTargetQueue.take();
         writeTarget.peer = peer;
@@ -145,7 +145,7 @@ public class TestWithPeerGroup extends TestWithNetworkConnections {
     }
 
     protected InboundMessageQueuer connectPeer(int id, VersionMessage versionMessage) throws Exception {
-        checkArgument(versionMessage.hasBlockChain());
+        checkArgument(versionMessage.services().has(Services.NODE_NETWORK));
         InboundMessageQueuer writeTarget = connectPeerWithoutVersionExchange(id);
         // Complete handshake with the peer - send/receive version(ack)s, receive bloom filter
         writeTarget.sendMessage(versionMessage);
@@ -162,7 +162,7 @@ public class TestWithPeerGroup extends TestWithNetworkConnections {
     // handle peer discovered by PeerGroup
     protected InboundMessageQueuer handleConnectToPeer(int id, VersionMessage versionMessage) throws Exception {
         InboundMessageQueuer writeTarget = newPeerWriteTargetQueue.take();
-        checkArgument(versionMessage.hasBlockChain());
+        checkArgument(versionMessage.services().has(Services.NODE_NETWORK));
         // Complete handshake with the peer - send/receive version(ack)s, receive bloom filter
         writeTarget.sendMessage(versionMessage);
         writeTarget.sendMessage(new VersionAck());
@@ -174,9 +174,7 @@ public class TestWithPeerGroup extends TestWithNetworkConnections {
         checkState(writeTarget.nextMessageBlocking() instanceof VersionMessage);
         checkState(writeTarget.nextMessageBlocking() instanceof SendAddrV2Message);
         checkState(writeTarget.nextMessageBlocking() instanceof VersionAck);
-        if (versionMessage.isBloomFilteringSupported()) {
-            checkState(writeTarget.nextMessageBlocking() instanceof BloomFilter);
-            checkState(writeTarget.nextMessageBlocking() instanceof MemoryPoolMessage);
-        }
+        checkState(writeTarget.nextMessageBlocking() instanceof BloomFilter);
+        checkState(writeTarget.nextMessageBlocking() instanceof MemoryPoolMessage);
     }
 }

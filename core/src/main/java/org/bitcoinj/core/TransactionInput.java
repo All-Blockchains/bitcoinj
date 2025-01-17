@@ -19,8 +19,10 @@ package org.bitcoinj.core;
 
 import org.bitcoinj.base.Coin;
 import org.bitcoinj.base.Sha256Hash;
-import org.bitcoinj.base.utils.ByteUtils;
-import org.bitcoinj.core.internal.InternalUtils;
+import org.bitcoinj.base.VarInt;
+import org.bitcoinj.base.internal.Buffers;
+import org.bitcoinj.base.internal.ByteUtils;
+import org.bitcoinj.base.internal.InternalUtils;
 import org.bitcoinj.script.Script;
 import org.bitcoinj.script.ScriptException;
 import org.bitcoinj.wallet.DefaultRiskAnalysis;
@@ -28,15 +30,15 @@ import org.bitcoinj.wallet.KeyBag;
 import org.bitcoinj.wallet.RedeemData;
 
 import javax.annotation.Nullable;
-import java.io.IOException;
-import java.io.OutputStream;
 import java.lang.ref.WeakReference;
+import java.nio.BufferOverflowException;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
 
-import static com.google.common.base.Preconditions.checkElementIndex;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static org.bitcoinj.base.internal.Preconditions.checkArgument;
 
 /**
  * <p>A transfer of coins from one address to another creates a transaction in which the outputs
@@ -46,7 +48,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
  * 
  * <p>Instances of this class are not safe for use by multiple threads.</p>
  */
-public class TransactionInput extends ChildMessage {
+public class TransactionInput {
     /** Magic sequence number that indicates there is no sequence number. */
     public static final long NO_SEQUENCE = 0xFFFFFFFFL;
     /**
@@ -68,6 +70,8 @@ public class TransactionInput extends ChildMessage {
     // Magic outpoint index that indicates the input is in fact unconnected.
     private static final long UNCONNECTED = 0xFFFFFFFFL;
 
+    @Nullable private Transaction parent;
+
     // Allows for altering transactions after they were broadcast. Values below NO_SEQUENCE-1 mean it can be altered.
     private long sequence;
     // Data needed to connect to the output of the transaction we're gathering coins from.
@@ -87,70 +91,68 @@ public class TransactionInput extends ChildMessage {
 
     /**
      * Creates an input that connects to nothing - used only in creation of coinbase transactions.
+     *
+     * @param parentTransaction parent transaction
+     * @param scriptBytes       arbitrary bytes in the script
      */
-    public TransactionInput(NetworkParameters params, @Nullable Transaction parentTransaction, byte[] scriptBytes) {
-        this(params, parentTransaction, scriptBytes, new TransactionOutPoint(params, UNCONNECTED, (Transaction) null));
+    public static TransactionInput coinbaseInput(Transaction parentTransaction, byte[] scriptBytes) {
+        Objects.requireNonNull(parentTransaction);
+        checkArgument(scriptBytes.length >= 2 && scriptBytes.length <= 100, () ->
+                "script must be between 2 and 100 bytes: " + scriptBytes.length);
+        return new TransactionInput(parentTransaction, scriptBytes, TransactionOutPoint.UNCONNECTED);
     }
 
-    public TransactionInput(NetworkParameters params, @Nullable Transaction parentTransaction, byte[] scriptBytes,
+    /**
+     * Deserialize this transaction input from a given payload.
+     *
+     * @param payload           payload to deserialize from
+     * @param parentTransaction parent transaction of the input
+     * @return read message
+     * @throws BufferUnderflowException if the read message extends beyond the remaining bytes of the payload
+     */
+    public static TransactionInput read(ByteBuffer payload, Transaction parentTransaction) throws BufferUnderflowException, ProtocolException {
+        Objects.requireNonNull(parentTransaction);
+        TransactionOutPoint outpoint = TransactionOutPoint.read(payload);
+        byte[] scriptBytes = Buffers.readLengthPrefixedBytes(payload);
+        long sequence = ByteUtils.readUint32(payload);
+        return new TransactionInput(parentTransaction, scriptBytes, outpoint, sequence, null);
+    }
+
+    public TransactionInput(@Nullable Transaction parentTransaction, byte[] scriptBytes,
                             TransactionOutPoint outpoint) {
-        this(params, parentTransaction, scriptBytes, outpoint, null);
+        this(parentTransaction, scriptBytes, outpoint, NO_SEQUENCE, null);
     }
 
-    public TransactionInput(NetworkParameters params, @Nullable Transaction parentTransaction, byte[] scriptBytes,
-            TransactionOutPoint outpoint, @Nullable Coin value) {
-        super(params);
+    public TransactionInput(@Nullable Transaction parentTransaction, byte[] scriptBytes,
+                            TransactionOutPoint outpoint, @Nullable Coin value) {
+        this(parentTransaction, scriptBytes, outpoint, NO_SEQUENCE, value);
+    }
+
+    private TransactionInput(@Nullable Transaction parentTransaction, byte[] scriptBytes,
+                            TransactionOutPoint outpoint, long sequence, @Nullable Coin value) {
+        checkArgument(value == null || value.signum() >= 0, () -> "value out of range: " + value);
+        parent = parentTransaction;
         this.scriptBytes = scriptBytes;
         this.outpoint = outpoint;
-        this.sequence = NO_SEQUENCE;
+        this.sequence = sequence;
         this.value = value;
-        setParent(parentTransaction);
-        length = 40 + (scriptBytes == null ? 1 : VarInt.sizeOf(scriptBytes.length) + scriptBytes.length);
     }
 
     /**
      * Creates an UNSIGNED input that links to the given output
      */
-    TransactionInput(NetworkParameters params, Transaction parentTransaction, TransactionOutput output) {
-        super(params);
-        long outputIndex = output.getIndex();
-        if(output.getParentTransaction() != null ) {
-            outpoint = new TransactionOutPoint(params, outputIndex, output.getParentTransaction());
-        } else {
-            outpoint = new TransactionOutPoint(params, output);
-        }
-        scriptBytes = EMPTY_ARRAY;
-        sequence = NO_SEQUENCE;
-        setParent(parentTransaction);
-        this.value = output.getValue();
-        length = 41;
+    TransactionInput(Transaction parentTransaction, TransactionOutput output) {
+        this(parentTransaction,
+                EMPTY_ARRAY,
+                output.getParentTransaction() != null ?
+                        new TransactionOutPoint(output.getIndex(), output.getParentTransaction()) :
+                        new TransactionOutPoint(output),
+                NO_SEQUENCE,
+                output.getValue());
     }
 
     /**
-     * Deserializes an input message. This is usually part of a transaction message.
-     */
-    public TransactionInput(NetworkParameters params, @Nullable Transaction parentTransaction, byte[] payload, int offset) throws ProtocolException {
-        super(params, payload, offset);
-        setParent(parentTransaction);
-        this.value = null;
-    }
-
-    /**
-     * Deserializes an input message. This is usually part of a transaction message.
-     * @param params NetworkParameters object.
-     * @param payload Bitcoin protocol formatted byte array containing message content.
-     * @param offset The location of the first payload byte within the array.
-     * @param serializer the serializer to use for this message.
-     * @throws ProtocolException
-     */
-    public TransactionInput(NetworkParameters params, Transaction parentTransaction, byte[] payload, int offset, MessageSerializer serializer)
-            throws ProtocolException {
-        super(params, payload, offset, parentTransaction, serializer, UNKNOWN_LENGTH);
-        this.value = null;
-    }
-
-    /**
-     * Gets the index of this input in the parent transaction, or throws if this input is free standing. Iterates
+     * Gets the index of this input in the parent transaction, or throws if this input is freestanding. Iterates
      * over the parents list to discover this.
      */
     public int getIndex() {
@@ -160,30 +162,48 @@ public class TransactionInput extends ChildMessage {
         return myIndex;
     }
 
-    @Override
-    protected void parse() throws ProtocolException {
-        outpoint = new TransactionOutPoint(params, payload, cursor, this, serializer);
-        cursor += outpoint.getMessageSize();
-        int scriptLen = readVarInt().intValue();
-        length = cursor - offset + scriptLen + 4;
-        scriptBytes = readBytes(scriptLen);
-        sequence = readUint32();
+    /**
+     * Write this transaction input into the given buffer.
+     *
+     * @param buf buffer to write into
+     * @return the buffer
+     * @throws BufferOverflowException if the input doesn't fit the remaining buffer
+     */
+    public ByteBuffer write(ByteBuffer buf) throws BufferOverflowException {
+        buf.put(outpoint.serialize());
+        Buffers.writeLengthPrefixedBytes(buf, scriptBytes);
+        ByteUtils.writeInt32LE(sequence, buf);
+        return buf;
     }
 
-    @Override
-    protected void bitcoinSerializeToStream(OutputStream stream) throws IOException {
-        outpoint.bitcoinSerialize(stream);
-        stream.write(new VarInt(scriptBytes.length).encode());
-        stream.write(scriptBytes);
-        ByteUtils.uint32ToByteStreamLE(sequence, stream);
+    /**
+     * Allocates a byte array and writes this transaction input into it.
+     *
+     * @return byte array containing the transaction input
+     */
+    public byte[] serialize() {
+        return write(ByteBuffer.allocate(messageSize())).array();
+    }
+
+    /**
+     * Return the size of the serialized message. Note that if the message was deserialized from a payload, this
+     * size can differ from the size of the original payload.
+     *
+     * @return size of the serialized message in bytes
+     */
+    public int messageSize() {
+        int size = TransactionOutPoint.BYTES;
+        size += VarInt.sizeOf(scriptBytes.length) + scriptBytes.length;
+        size += 4; // sequence
+        return size;
     }
 
     /**
      * Coinbase transactions have special inputs with hashes of zero. If this is such an input, returns true.
      */
     public boolean isCoinBase() {
-        return outpoint.getHash().equals(Sha256Hash.ZERO_HASH) &&
-                (outpoint.getIndex() & 0xFFFFFFFFL) == 0xFFFFFFFFL;  // -1 but all is serialized to the wire as unsigned int.
+        return outpoint.hash().equals(Sha256Hash.ZERO_HASH) &&
+                (outpoint.index() & 0xFFFFFFFFL) == 0xFFFFFFFFL;  // -1 but all is serialized to the wire as unsigned int.
     }
 
     /**
@@ -195,7 +215,7 @@ public class TransactionInput extends ChildMessage {
         // parameter is overloaded to be something totally different.
         Script script = scriptSig == null ? null : scriptSig.get();
         if (script == null) {
-            script = new Script(scriptBytes);
+            script = Script.parse(scriptBytes);
             scriptSig = new WeakReference<>(script);
         }
         return script;
@@ -203,9 +223,9 @@ public class TransactionInput extends ChildMessage {
 
     /** Set the given program as the scriptSig that is supposed to satisfy the connected output script. */
     public void setScriptSig(Script scriptSig) {
-        this.scriptSig = new WeakReference<>(checkNotNull(scriptSig));
+        this.scriptSig = new WeakReference<>(Objects.requireNonNull(scriptSig));
         // TODO: This should all be cleaned up so we have a consistent internal representation.
-        setScriptBytes(scriptSig.getProgram());
+        setScriptBytes(scriptSig.program());
     }
 
     /**
@@ -225,7 +245,8 @@ public class TransactionInput extends ChildMessage {
      * examples of how you can use this feature to build contract protocols.
      */
     public void setSequenceNumber(long sequence) {
-        unCache();
+        checkArgument(sequence >= 0 && sequence <= ByteUtils.MAX_UNSIGNED_INTEGER, () ->
+                "sequence out of range: " + sequence);
         this.sequence = sequence;
     }
 
@@ -256,20 +277,15 @@ public class TransactionInput extends ChildMessage {
      * @param scriptBytes the scriptBytes to set
      */
     void setScriptBytes(byte[] scriptBytes) {
-        unCache();
         this.scriptSig = null;
-        int oldLength = length;
         this.scriptBytes = scriptBytes;
-        // 40 = previous_outpoint (36) + sequence (4)
-        int newLength = 40 + (scriptBytes == null ? 1 : VarInt.sizeOf(scriptBytes.length) + scriptBytes.length);
-        adjustLength(newLength - oldLength);
     }
 
     /**
      * @return The Transaction that owns this input.
      */
     public Transaction getParentTransaction() {
-        return (Transaction) parent;
+        return parent;
     }
 
     /**
@@ -320,10 +336,10 @@ public class TransactionInput extends ChildMessage {
      */
     @Nullable
     TransactionOutput getConnectedOutput(Map<Sha256Hash, Transaction> transactions) {
-        Transaction tx = transactions.get(outpoint.getHash());
+        Transaction tx = transactions.get(outpoint.hash());
         if (tx == null)
             return null;
-        return tx.getOutputs().get((int) outpoint.getIndex());
+        return tx.getOutput(outpoint);
     }
 
     /**
@@ -351,7 +367,7 @@ public class TransactionInput extends ChildMessage {
      * @return NO_SUCH_TX if the prevtx wasn't found, ALREADY_SPENT if there was a conflict, SUCCESS if not.
      */
     public ConnectionResult connect(Map<Sha256Hash, Transaction> transactions, ConnectMode mode) {
-        Transaction tx = transactions.get(outpoint.getHash());
+        Transaction tx = transactions.get(outpoint.hash());
         if (tx == null) {
             return TransactionInput.ConnectionResult.NO_SUCH_TX;
         }
@@ -368,10 +384,9 @@ public class TransactionInput extends ChildMessage {
      * @return NO_SUCH_TX if transaction is not the prevtx, ALREADY_SPENT if there was a conflict, SUCCESS if not.
      */
     public ConnectionResult connect(Transaction transaction, ConnectMode mode) {
-        if (!transaction.getTxId().equals(outpoint.getHash()))
+        if (!transaction.getTxId().equals(outpoint.hash()))
             return ConnectionResult.NO_SUCH_TX;
-        checkElementIndex((int) outpoint.getIndex(), transaction.getOutputs().size(), "Corrupt transaction");
-        TransactionOutput out = transaction.getOutput((int) outpoint.getIndex());
+        TransactionOutput out = transaction.getOutput(outpoint);
         if (!out.isAvailableForSpending()) {
             if (getParentTransaction().equals(outpoint.fromTx)) {
                 // Already connected.
@@ -379,7 +394,7 @@ public class TransactionInput extends ChildMessage {
             } else if (mode == ConnectMode.DISCONNECT_ON_CONFLICT) {
                 out.markAsUnspent();
             } else if (mode == ConnectMode.ABORT_ON_CONFLICT) {
-                outpoint.fromTx = out.getParentTransaction();
+                outpoint = outpoint.connectTransaction(out.getParentTransaction());
                 return TransactionInput.ConnectionResult.ALREADY_SPENT;
             }
         }
@@ -389,7 +404,7 @@ public class TransactionInput extends ChildMessage {
 
     /** Internal use only: connects this TransactionInput to the given output (updates pointers and spent flags) */
     public void connect(TransactionOutput out) {
-        outpoint.fromTx = out.getParentTransaction();
+        outpoint = outpoint.connectTransaction(out.getParentTransaction());
         out.markAsSpent(this);
         value = out.getValue();
     }
@@ -404,12 +419,12 @@ public class TransactionInput extends ChildMessage {
         TransactionOutput connectedOutput;
         if (outpoint.fromTx != null) {
             // The outpoint is connected using a "standard" wallet, disconnect it.
-            connectedOutput = outpoint.fromTx.getOutput((int) outpoint.getIndex());
-            outpoint.fromTx = null;
+            connectedOutput = outpoint.fromTx.getOutput(outpoint);
+            outpoint = outpoint.disconnectTransaction();
         } else if (outpoint.connectedOutput != null) {
             // The outpoint is connected using a UTXO based wallet, disconnect it.
             connectedOutput = outpoint.connectedOutput;
-            outpoint.connectedOutput = null;
+            outpoint = outpoint.disconnectOutput();
         } else {
             // The outpoint is not connected, do nothing.
             return false;
@@ -454,9 +469,8 @@ public class TransactionInput extends ChildMessage {
      */
     public void verify() throws VerificationException {
         final Transaction fromTx = getOutpoint().fromTx;
-        long spendingIndex = getOutpoint().getIndex();
-        checkNotNull(fromTx, "Not connected");
-        final TransactionOutput output = fromTx.getOutput((int) spendingIndex);
+        Objects.requireNonNull(fromTx, "Not connected");
+        final TransactionOutput output = fromTx.getOutput(outpoint);
         verify(output);
     }
 
@@ -470,9 +484,9 @@ public class TransactionInput extends ChildMessage {
      */
     public void verify(TransactionOutput output) throws VerificationException {
         if (output.parent != null) {
-            if (!getOutpoint().getHash().equals(output.getParentTransaction().getTxId()))
+            if (!getOutpoint().hash().equals(output.getParentTransaction().getTxId()))
                 throw new VerificationException("This input does not refer to the tx containing the output.");
-            if (getOutpoint().getIndex() != output.getIndex())
+            if (getOutpoint().index() != output.getIndex())
                 throw new VerificationException("This input refers to a different output on the given tx.");
         }
         Script pubKey = output.getScriptPubKey();
@@ -500,11 +514,6 @@ public class TransactionInput extends ChildMessage {
         return getOutpoint().fromTx;
     }
 
-    /** Returns a copy of the input detached from its containing transaction, if need be. */
-    public TransactionInput duplicateDetached() {
-        return new TransactionInput(params, null, bitcoinSerialize(), 0);
-    }
-
     /**
      * <p>Returns either RuleViolation.NONE if the input is standard, or which rule makes it non-standard if so.
      * The "IsStandard" rules control whether the default Bitcoin Core client blocks relay of a tx / refuses to mine it,
@@ -516,12 +525,16 @@ public class TransactionInput extends ChildMessage {
         return DefaultRiskAnalysis.isInputStandard(this);
     }
 
+    protected final void setParent(@Nullable Transaction parent) {
+        this.parent = parent;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         TransactionInput other = (TransactionInput) o;
-        return sequence == other.sequence && parent == other.parent
+        return sequence == other.sequence && parent != null && parent.equals(other.parent)
             && outpoint.equals(other.outpoint) && Arrays.equals(scriptBytes, other.scriptBytes);
     }
 
@@ -531,25 +544,26 @@ public class TransactionInput extends ChildMessage {
     }
 
     /**
-     * Returns a human readable debug string.
+     * Returns a human-readable debug string.
      */
     @Override
     public String toString() {
         StringBuilder s = new StringBuilder("TxIn");
-        try {
-            if (isCoinBase()) {
-                s.append(": COINBASE");
-            } else {
-                s.append(" for [").append(outpoint).append("]: ").append(getScriptSig());
+        if (isCoinBase()) {
+            s.append(": COINBASE");
+        } else {
+            s.append(" for [").append(outpoint).append("]: ");
+            try {
+                s.append(getScriptSig());
                 String flags = InternalUtils.commaJoin(hasWitness() ? "witness" : null,
                         hasSequence() ? "sequence: " + Long.toHexString(sequence) : null,
                         isOptInFullRBF() ? "opts into full RBF" : null);
                 if (!flags.isEmpty())
                     s.append(" (").append(flags).append(')');
+            } catch (ScriptException e) {
+                s.append(" [exception: ").append(e.getMessage()).append("]");
             }
-            return s.toString();
-        } catch (ScriptException e) {
-            throw new RuntimeException(e);
         }
+        return s.toString();
     }
 }

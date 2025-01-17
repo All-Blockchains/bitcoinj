@@ -16,12 +16,11 @@
 
 package org.bitcoinj.examples;
 
+import org.bitcoinj.base.Address;
 import org.bitcoinj.base.BitcoinNetwork;
 import org.bitcoinj.base.Coin;
-import org.bitcoinj.base.ScriptType;
-import org.bitcoinj.core.*;
+import org.bitcoinj.core.InsufficientMoneyException;
 import org.bitcoinj.kits.WalletAppKit;
-import org.bitcoinj.wallet.KeyChainGroupStructure;
 import org.bitcoinj.wallet.Wallet;
 import org.bitcoinj.wallet.Wallet.BalanceType;
 
@@ -36,10 +35,7 @@ public class SendRequest {
     public static void main(String[] args) throws Exception {
 
         // We use the WalletAppKit that handles all the boilerplate for us. Have a look at the Kit.java example for more details.
-        WalletAppKit kit = new WalletAppKit(BitcoinNetwork.TESTNET, ScriptType.P2WPKH, KeyChainGroupStructure.BIP32, new File("."), "sendrequest-example");
-        kit.startAsync();
-        kit.awaitRunning();
-
+        WalletAppKit kit = WalletAppKit.launch(BitcoinNetwork.TESTNET, new File("."), "sendrequest-example");
 
         // How much coins do we want to send?
         // The Coin class represents a monetary Bitcoin value.
@@ -59,7 +55,7 @@ public class SendRequest {
         // In this example we catch the InsufficientMoneyException and register a BalanceFuture callback that runs once the wallet has enough balance.
         try {
             Wallet.SendResult result = kit.wallet().sendCoins(kit.peerGroup(), to, value);
-            System.out.println("coins sent. transaction hash: " + result.tx.getTxId());
+            System.out.println("coins sent. transaction hash: " + result.transaction().getTxId());
             // you can use a block explorer like https://www.biteasy.com/ to inspect the transaction with the printed transaction hash. 
         } catch (InsufficientMoneyException e) {
             System.out.println("Not enough coins in your wallet. Missing " + e.missing.getValue() + " satoshis are missing (including fees)");

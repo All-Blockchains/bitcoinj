@@ -16,8 +16,8 @@
 
 package org.bitcoinj.crypto;
 
-import org.bitcoinj.base.utils.StreamUtils;
-import org.bitcoinj.core.internal.InternalUtils;
+import org.bitcoinj.base.internal.StreamUtils;
+import org.bitcoinj.base.internal.InternalUtils;
 
 import javax.annotation.Nonnull;
 import java.util.AbstractList;

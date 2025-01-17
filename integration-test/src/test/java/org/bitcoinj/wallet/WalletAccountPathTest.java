@@ -16,11 +16,11 @@
 
 package org.bitcoinj.wallet;
 
+import org.bitcoinj.base.BitcoinNetwork;
+import org.bitcoinj.base.Network;
 import org.bitcoinj.base.ScriptType;
 import org.bitcoinj.core.Context;
-import org.bitcoinj.core.NetworkParameters;
 import org.bitcoinj.crypto.HDPath;
-import org.bitcoinj.base.BitcoinNetwork;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -32,12 +32,12 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.stream.Stream;
 
-import static org.bitcoinj.base.ScriptType.P2PKH;
-import static org.bitcoinj.base.ScriptType.P2WPKH;
 import static org.bitcoinj.base.BitcoinNetwork.MAINNET;
 import static org.bitcoinj.base.BitcoinNetwork.TESTNET;
-import static org.bitcoinj.wallet.KeyChainGroupStructure.BIP43;
+import static org.bitcoinj.base.ScriptType.P2PKH;
+import static org.bitcoinj.base.ScriptType.P2WPKH;
 import static org.bitcoinj.wallet.KeyChainGroupStructure.BIP32;
+import static org.bitcoinj.wallet.KeyChainGroupStructure.BIP43;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
@@ -59,7 +59,7 @@ public class WalletAccountPathTest {
     void walletStructurePathTest2(KeyChainGroupStructure structure, HDPath expectedPath, ScriptType scriptType,
                                   BitcoinNetwork network) throws IOException, UnreadableWalletException {
         // When we create a wallet with parameterized structure, network, and scriptType
-        Wallet wallet = createWallet(walletFile, NetworkParameters.of(network), structure, scriptType);
+        Wallet wallet = createWallet(walletFile, network, structure, scriptType);
 
         // Then the account path is as expected
         assertEquals(expectedPath, wallet.getActiveKeyChain().getAccountPath());
@@ -80,10 +80,10 @@ public class WalletAccountPathTest {
     }
 
     // Create a wallet, save it to a file, then reload from a file
-    private static Wallet createWallet(File walletFile, NetworkParameters params, KeyChainGroupStructure structure, ScriptType outputScriptType) throws IOException, UnreadableWalletException {
+    private static Wallet createWallet(File walletFile, Network network, KeyChainGroupStructure structure, ScriptType outputScriptType) throws IOException, UnreadableWalletException {
         Context.propagate(new Context());
-        DeterministicSeed seed = new DeterministicSeed(testWalletMnemonic, null, "", Instant.now().getEpochSecond());
-        Wallet wallet = Wallet.fromSeed(params, seed, outputScriptType, structure);
+        DeterministicSeed seed = new DeterministicSeed(testWalletMnemonic, null, "", Instant.now());
+        Wallet wallet = Wallet.fromSeed(network, seed, outputScriptType, structure);
         wallet.saveToFile(walletFile);
         return Wallet.loadFromFile(walletFile);
     }

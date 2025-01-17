@@ -17,6 +17,7 @@
 package org.bitcoinj.testing;
 
 import org.bitcoinj.base.Coin;
+import org.bitcoinj.base.internal.MockAltNetwork;
 import org.bitcoinj.base.utils.MonetaryFormat;
 import org.bitcoinj.core.BitcoinSerializer;
 import org.bitcoinj.core.Block;
@@ -59,11 +60,6 @@ public class MockAltNetworkParams extends NetworkParameters {
     }
 
     @Override
-    public Coin getMinNonDustOutput() {
-        return null;
-    }
-
-    @Override
     public MonetaryFormat getMonetaryFormat() {
         return null;
     }
@@ -79,12 +75,7 @@ public class MockAltNetworkParams extends NetworkParameters {
     }
 
     @Override
-    public BitcoinSerializer getSerializer(boolean parseRetain) {
+    public BitcoinSerializer getSerializer() {
         return null;
-    }
-
-    @Override
-    public int getProtocolVersionNum(ProtocolVersion version) {
-        return 0;
     }
 }

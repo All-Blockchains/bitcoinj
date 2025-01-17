@@ -16,7 +16,7 @@
 
 package org.bitcoinj.net.discovery;
 
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 import org.bitcoinj.core.NetworkParameters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,11 +25,12 @@ import javax.annotation.Nullable;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
+import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 /**
  * SeedPeers stores a pre-determined list of Bitcoin node addresses. These nodes are selected based on being
@@ -105,13 +106,12 @@ public class SeedPeers implements PeerDiscovery {
     /**
      * Returns all the Bitcoin nodes within the list.
      *
-     * @param services     ignored
-     * @param timeoutValue ignored
-     * @param timeoutUnit  ignored
+     * @param services ignored
+     * @param timeout  ignored
      * @return the pre-determined list of peers
      */
     @Override
-    public List<InetSocketAddress> getPeers(long services, long timeoutValue, TimeUnit timeoutUnit) {
+    public List<InetSocketAddress> getPeers(long services, Duration timeout) {
         if (services != 0)
             log.info("Pre-determined peers cannot be filtered by services: {}", services);
         return Collections.unmodifiableList(seedAddrs);
@@ -122,8 +122,7 @@ public class SeedPeers implements PeerDiscovery {
     }
 
     private static InetAddress convertAddress(int seed) throws UnknownHostException {
-        byte[] v4addr = new byte[4];
-        ByteUtils.uint32ToByteArrayLE(seed, v4addr, 0);
+        byte[] v4addr = ByteBuffer.allocate(4).putInt(seed).array(); // Big-Endian
         return InetAddress.getByAddress(v4addr);
     }
 }

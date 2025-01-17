@@ -17,36 +17,35 @@
 
 package org.bitcoinj.examples;
 
+import org.bitcoinj.base.BitcoinNetwork;
+import org.bitcoinj.base.Coin;
+import org.bitcoinj.base.Network;
+import org.bitcoinj.base.ScriptType;
+import org.bitcoinj.base.internal.ByteUtils;
+import org.bitcoinj.core.Transaction;
+import org.bitcoinj.core.TransactionInput;
+import org.bitcoinj.core.TransactionOutput;
+import org.bitcoinj.core.VerificationException;
+import org.bitcoinj.crypto.ECKey;
+import org.bitcoinj.crypto.SignatureDecodeException;
+import org.bitcoinj.crypto.TransactionSignature;
+import org.bitcoinj.script.Script;
+import org.bitcoinj.script.ScriptBuilder;
+import org.bitcoinj.script.ScriptChunk;
+import org.bitcoinj.script.ScriptException;
+import org.bitcoinj.signers.LocalTransactionSigner;
+import org.bitcoinj.signers.TransactionSigner.ProposedTransaction;
+import org.bitcoinj.wallet.KeyBag;
+import org.bitcoinj.wallet.RedeemData;
+
 import java.io.IOException;
 import java.math.BigInteger;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.EnumSet;
-
-import static com.google.common.base.Preconditions.checkNotNull;
-
-import org.bitcoinj.base.ScriptType;
-import org.bitcoinj.base.utils.ByteUtils;
-import org.bitcoinj.base.Coin;
-import org.bitcoinj.core.ECKey;
-import org.bitcoinj.core.NetworkParameters;
-import org.bitcoinj.core.SignatureDecodeException;
-import org.bitcoinj.core.Transaction;
-import org.bitcoinj.core.TransactionInput;
-import org.bitcoinj.core.TransactionOutput;
-import org.bitcoinj.core.VerificationException;
-import org.bitcoinj.crypto.TransactionSignature;
-import org.bitcoinj.params.MainNetParams;
-import org.bitcoinj.script.Script;
-import org.bitcoinj.script.ScriptBuilder;
-import org.bitcoinj.script.ScriptChunk;
-import org.bitcoinj.script.ScriptException;
+import java.util.Objects;
 
 import static org.bitcoinj.script.ScriptOpCodes.getOpCodeName;
-import org.bitcoinj.signers.LocalTransactionSigner;
-import org.bitcoinj.signers.TransactionSigner.ProposedTransaction;
-import org.bitcoinj.wallet.KeyBag;
-import org.bitcoinj.wallet.RedeemData;
 
 /**
  * Test case generator for transactions with low-S and high-S signatures, to
@@ -59,7 +58,7 @@ public class GenerateLowSTests {
 
     public static void main(final String[] argv)
             throws NoSuchAlgorithmException, IOException, VerificationException, SignatureDecodeException {
-        final NetworkParameters params = new MainNetParams();
+        final Network network = BitcoinNetwork.MAINNET;
         final LocalTransactionSigner signer = new LocalTransactionSigner();
         final SecureRandom secureRandom = SecureRandom.getInstanceStrong();
         final ECKey key = new ECKey(secureRandom);
@@ -84,13 +83,13 @@ public class GenerateLowSTests {
         // Generate a fictional output transaction we take values from, and
         // an input transaction for the test case
 
-        final Transaction outputTransaction = new Transaction(params);
-        final Transaction inputTransaction = new Transaction(params);
-        final TransactionOutput output = new TransactionOutput(params, inputTransaction, Coin.ZERO, key.toAddress(ScriptType.P2PKH, params.network()));
+        final Transaction outputTransaction = new Transaction();
+        final Transaction inputTransaction = new Transaction();
+        final TransactionOutput output = new TransactionOutput(inputTransaction, Coin.ZERO, key.toAddress(ScriptType.P2PKH, network));
 
         inputTransaction.addOutput(output);
         outputTransaction.addInput(output);
-        outputTransaction.addOutput(Coin.ZERO, new ECKey(secureRandom).toAddress(ScriptType.P2PKH, params.network()));
+        outputTransaction.addOutput(Coin.ZERO, new ECKey(secureRandom).toAddress(ScriptType.P2PKH, network));
 
         addOutputs(outputTransaction, bag);
 
@@ -104,7 +103,7 @@ public class GenerateLowSTests {
             EnumSet.of(Script.VerifyFlag.DERSIG, Script.VerifyFlag.P2SH));
 
         final Script scriptSig = input.getScriptSig();
-        final TransactionSignature signature = TransactionSignature.decodeFromBitcoin(scriptSig.getChunks().get(0).data, true, false);
+        final TransactionSignature signature = TransactionSignature.decodeFromBitcoin(scriptSig.chunks().get(0).data, true, false);
 
         // First output a conventional low-S transaction with the LOW_S flag, for the tx_valid.json set
         System.out.println("[\"A transaction with a low-S signature.\"],");
@@ -112,12 +111,12 @@ public class GenerateLowSTests {
             + inputTransaction.getTxId() + "\", "
             + output.getIndex() + ", \""
             + scriptToString(output.getScriptPubKey()) + "\"]],\n"
-            + "\"" + proposedTransaction.partialTx.toHexString() + "\", \""
+            + "\"" + ByteUtils.formatHex(proposedTransaction.partialTx.serialize()) + "\", \""
             + Script.VerifyFlag.P2SH.name() + "," + Script.VerifyFlag.LOW_S.name() + "\"],");
 
         final BigInteger highS = HIGH_S_DIFFERENCE.subtract(signature.s);
         final TransactionSignature highSig = new TransactionSignature(signature.r, highS);
-        input.setScriptSig(new ScriptBuilder().data(highSig.encodeToBitcoin()).data(scriptSig.getChunks().get(1).data).build());
+        input.setScriptSig(new ScriptBuilder().data(highSig.encodeToBitcoin()).data(scriptSig.chunks().get(1).data).build());
         input.getScriptSig().correctlySpends(outputTransaction, 0, null, null, output.getScriptPubKey(),
             EnumSet.of(Script.VerifyFlag.P2SH));
 
@@ -127,7 +126,7 @@ public class GenerateLowSTests {
             + inputTransaction.getTxId() + "\", "
             + output.getIndex() + ", \""
             + scriptToString(output.getScriptPubKey()) + "\"]],\n"
-            + "\"" + proposedTransaction.partialTx.toHexString() + "\", \""
+            + "\"" + ByteUtils.formatHex(proposedTransaction.partialTx.serialize()) + "\", \""
             + Script.VerifyFlag.P2SH.name() + "\"],");
 
         // Lastly a conventional high-S transaction with the LOW_S flag, for the tx_invalid.json set
@@ -136,7 +135,7 @@ public class GenerateLowSTests {
             + inputTransaction.getTxId() + "\", "
             + output.getIndex() + ", \""
             + scriptToString(output.getScriptPubKey()) + "\"]],\n"
-            + "\"" + proposedTransaction.partialTx.toHexString() + "\", \""
+            + "\"" + ByteUtils.formatHex(proposedTransaction.partialTx.serialize()) + "\", \""
             + Script.VerifyFlag.P2SH.name() + "," + Script.VerifyFlag.LOW_S.name() + "\"],");
     }
 
@@ -146,7 +145,8 @@ public class GenerateLowSTests {
             TransactionInput txIn = outputTransaction.getInput(i);
             Script scriptPubKey = txIn.getConnectedOutput().getScriptPubKey();
             RedeemData redeemData = txIn.getConnectedRedeemData(bag);
-            checkNotNull(redeemData, "Transaction exists in wallet that we cannot redeem: %s", txIn.getOutpoint().getHash());
+            Objects.requireNonNull(redeemData, () ->
+                    "Transaction exists in wallet that we cannot redeem: " + txIn.getOutpoint().hash());
             txIn.setScriptSig(scriptPubKey.createEmptyInputScript(redeemData.keys.get(0), redeemData.redeemScript));
         }
     }
@@ -157,7 +157,7 @@ public class GenerateLowSTests {
      */
     private static String scriptToString(Script scriptPubKey) {
         final StringBuilder buf = new StringBuilder();
-        for (ScriptChunk chunk: scriptPubKey.getChunks()) {
+        for (ScriptChunk chunk: scriptPubKey.chunks()) {
             if (buf.length() > 0) {
                 buf.append(" ");
             }
@@ -167,7 +167,7 @@ public class GenerateLowSTests {
                 // Data chunk
                 buf.append("0x")
                     .append(Integer.toString(chunk.opcode, 16)).append(" 0x")
-                    .append(ByteUtils.HEX.encode(chunk.data));
+                    .append(ByteUtils.formatHex(chunk.data));
             } else {
                 buf.append(chunk.toString());
             }

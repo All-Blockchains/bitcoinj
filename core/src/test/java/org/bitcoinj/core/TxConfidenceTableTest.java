@@ -16,9 +16,11 @@
 
 package org.bitcoinj.core;
 
+import org.bitcoinj.base.Address;
 import org.bitcoinj.base.BitcoinNetwork;
 import org.bitcoinj.base.ScriptType;
 import org.bitcoinj.base.Sha256Hash;
+import org.bitcoinj.crypto.ECKey;
 import org.bitcoinj.params.TestNet3Params;
 import org.bitcoinj.testing.FakeTxBuilder;
 import org.bitcoinj.utils.BriefLogFormatter;
@@ -27,6 +29,7 @@ import org.junit.Before;
 import org.junit.Test;
 
 import java.net.InetAddress;
+import java.nio.ByteBuffer;
 
 import static org.bitcoinj.base.Coin.COIN;
 import static org.easymock.EasyMock.anyObject;
@@ -54,18 +57,18 @@ public class TxConfidenceTableTest {
         Address to = new ECKey().toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET);
         Address change = new ECKey().toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET);
 
-        tx1 = FakeTxBuilder.createFakeTxWithChangeAddress(TESTNET, COIN, to, change);
-        tx2 = FakeTxBuilder.createFakeTxWithChangeAddress(TESTNET, COIN, to, change);
+        tx1 = FakeTxBuilder.createFakeTxWithChangeAddress(COIN, to, change);
+        tx2 = FakeTxBuilder.createFakeTxWithChangeAddress(COIN, to, change);
         assertEquals(tx1.getTxId(), tx2.getTxId());
 
-        address1 = new PeerAddress(TESTNET, InetAddress.getByAddress(new byte[] { 127, 0, 0, 1 }));
-        address2 = new PeerAddress(TESTNET, InetAddress.getByAddress(new byte[] { 127, 0, 0, 2 }));
-        address3 = new PeerAddress(TESTNET, InetAddress.getByAddress(new byte[] { 127, 0, 0, 3 }));
+        address1 = PeerAddress.simple(InetAddress.getByAddress(new byte[] { 127, 0, 0, 1 }), TESTNET.getPort());
+        address2 = PeerAddress.simple(InetAddress.getByAddress(new byte[] { 127, 0, 0, 2 }), TESTNET.getPort());
+        address3 = PeerAddress.simple(InetAddress.getByAddress(new byte[] { 127, 0, 0, 3 }), TESTNET.getPort());
     }
 
     @Test
     public void pinHandlers() {
-        Transaction tx = TESTNET.getDefaultSerializer().makeTransaction(tx1.bitcoinSerialize());
+        Transaction tx = TESTNET.getDefaultSerializer().makeTransaction(ByteBuffer.wrap(tx1.serialize()));
         Sha256Hash hash = tx.getTxId();
         table.seen(hash, address1);
         assertEquals(1, tx.getConfidence().numBroadcastPeers());

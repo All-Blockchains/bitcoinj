@@ -17,17 +17,17 @@
 
 package org.bitcoinj.params;
 
-import com.google.common.base.Stopwatch;
 import org.bitcoinj.base.BitcoinNetwork;
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.Stopwatch;
+import org.bitcoinj.base.internal.TimeUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 import org.bitcoinj.core.BitcoinSerializer;
 import org.bitcoinj.core.Block;
 import org.bitcoinj.base.Coin;
 import org.bitcoinj.core.NetworkParameters;
 import org.bitcoinj.base.Sha256Hash;
+import org.bitcoinj.core.ProtocolVersion;
 import org.bitcoinj.core.StoredBlock;
-import org.bitcoinj.core.Transaction;
-import org.bitcoinj.core.TransactionOutput;
 import org.bitcoinj.core.VerificationException;
 import org.bitcoinj.protocols.payments.PaymentProtocol;
 import org.bitcoinj.store.BlockStore;
@@ -38,9 +38,12 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 import java.math.BigInteger;
-import java.util.concurrent.TimeUnit;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.Temporal;
+import java.time.temporal.TemporalUnit;
 
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * Parameters for Bitcoin-like networks.
@@ -57,7 +60,7 @@ public abstract class BitcoinNetworkParams extends NetworkParameters {
     /**
      * Block reward halving interval (number of blocks)
      */
-    public static final int REWARD_HALVING_INTERVAL = 210000;
+    public static final int REWARD_HALVING_INTERVAL = 210_000;
 
     private static final Logger log = LoggerFactory.getLogger(BitcoinNetworkParams.class);
 
@@ -86,8 +89,6 @@ public abstract class BitcoinNetworkParams extends NetworkParameters {
             return TestNet3Params.get();
         } else if (id.equals(BitcoinNetwork.ID_SIGNET)) {
             return SigNetParams.get();
-        } else if (id.equals(BitcoinNetwork.ID_UNITTESTNET)) {
-            return UnitTestParams.get();
         } else if (id.equals(BitcoinNetwork.ID_REGTEST)) {
             return RegTestParams.get();
         } else {
@@ -176,7 +177,7 @@ public abstract class BitcoinNetworkParams extends NetworkParameters {
 
         // We need to find a block far back in the chain. It's OK that this is expensive because it only occurs every
         // two weeks after the initial block chain download.
-        final Stopwatch watch = Stopwatch.createStarted();
+        Stopwatch watch = Stopwatch.start();
         Sha256Hash hash = prev.getHash();
         StoredBlock cursor = null;
         final int interval = this.getInterval();
@@ -189,14 +190,14 @@ public abstract class BitcoinNetworkParams extends NetworkParameters {
             }
             hash = cursor.getHeader().getPrevBlockHash();
         }
-        checkState(cursor != null && isDifficultyTransitionPoint(cursor.getHeight() - 1),
-                "Didn't arrive at a transition point.");
+        checkState(cursor != null && isDifficultyTransitionPoint(cursor.getHeight() - 1), () ->
+                "didn't arrive at a transition point");
         watch.stop();
-        if (watch.elapsed(TimeUnit.MILLISECONDS) > 50)
+        if (watch.elapsed().toMillis() > 50)
             log.info("Difficulty transition traversal took {}", watch);
 
         Block blockIntervalAgo = cursor.getHeader();
-        int timespan = (int) (prev.getTimeSeconds() - blockIntervalAgo.getTimeSeconds());
+        int timespan = (int) (prev.time().getEpochSecond() - blockIntervalAgo.time().getEpochSecond());
         // Limit the adjustment step.
         final int targetTimespan = this.getTargetTimespan();
         if (timespan < targetTimespan / 4)
@@ -208,9 +209,12 @@ public abstract class BitcoinNetworkParams extends NetworkParameters {
         newTarget = newTarget.multiply(BigInteger.valueOf(timespan));
         newTarget = newTarget.divide(BigInteger.valueOf(targetTimespan));
 
-        if (newTarget.compareTo(this.getMaxTarget()) > 0) {
-            log.info("Difficulty hit proof of work limit: {}", newTarget.toString(16));
-            newTarget = this.getMaxTarget();
+        BigInteger maxTarget = this.getMaxTarget();
+        if (newTarget.compareTo(maxTarget) > 0) {
+            log.info("Difficulty hit proof of work limit: {} vs {}",
+                    Long.toHexString(ByteUtils.encodeCompactBits(newTarget)),
+                    Long.toHexString(ByteUtils.encodeCompactBits(maxTarget)));
+            newTarget = maxTarget;
         }
 
         int accuracyBytes = (int) (nextBlock.getDifficultyTarget() >>> 24) - 3;
@@ -232,13 +236,6 @@ public abstract class BitcoinNetworkParams extends NetworkParameters {
         return BitcoinNetwork.MAX_MONEY;
     }
 
-    /** @deprecated use {@link TransactionOutput#getMinNonDustValue()} */
-    @Override
-    @Deprecated
-    public Coin getMinNonDustOutput() {
-        return Transaction.MIN_NONDUST_OUTPUT;
-    }
-
     /**
      * @deprecated Get one another way or construct your own {@link MonetaryFormat} as needed.
      */
@@ -249,13 +246,8 @@ public abstract class BitcoinNetworkParams extends NetworkParameters {
     }
 
     @Override
-    public int getProtocolVersionNum(final ProtocolVersion version) {
-        return version.getBitcoinProtocolVersion();
-    }
-
-    @Override
-    public BitcoinSerializer getSerializer(boolean parseRetain) {
-        return new BitcoinSerializer(this, parseRetain);
+    public BitcoinSerializer getSerializer() {
+        return new BitcoinSerializer(network);
     }
 
     @Override

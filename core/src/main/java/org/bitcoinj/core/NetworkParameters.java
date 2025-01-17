@@ -17,10 +17,13 @@
 
 package org.bitcoinj.core;
 
+import org.bitcoinj.base.Address;
 import org.bitcoinj.base.BitcoinNetwork;
 import org.bitcoinj.base.Coin;
+import org.bitcoinj.base.LegacyAddress;
 import org.bitcoinj.base.Network;
 import org.bitcoinj.base.Sha256Hash;
+import org.bitcoinj.crypto.DumpedPrivateKey;
 import org.bitcoinj.params.BitcoinNetworkParams;
 import org.bitcoinj.params.Networks;
 import org.bitcoinj.protocols.payments.PaymentProtocol;
@@ -32,6 +35,7 @@ import org.bitcoinj.utils.VersionTally;
 
 import javax.annotation.Nullable;
 import java.math.BigInteger;
+import java.time.Instant;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Map;
@@ -66,7 +70,7 @@ public abstract class NetworkParameters {
 
     protected BigInteger maxTarget;
     protected int port;
-    protected long packetMagic;  // Indicates message origin network and is used to seek to the next message when stream state is unknown.
+    protected int packetMagic;  // Indicates message origin network and is used to seek to the next message when stream state is unknown.
     protected int addressHeader;
     protected int p2shHeader;
     protected int dumpedPrivateKeyHeader;
@@ -114,7 +118,7 @@ public abstract class NetworkParameters {
      * network rules in a soft-forking manner, that is, blocks that don't follow the rules are accepted but not
      * mined upon and thus will be quickly re-orged out as long as the majority are enforcing the rule.
      */
-    public static final int BIP16_ENFORCE_TIME = 1333238400;
+    public static final Instant BIP16_ENFORCE_TIME = Instant.ofEpochSecond(1333238400);
     
     /**
      * The maximum number of coins to be generated
@@ -202,19 +206,6 @@ public abstract class NetworkParameters {
         return PaymentProtocol.paramsFromPmtProtocolID(pmtProtocolId);
     }
 
-    /**
-     * Get a NetworkParameters from an Address.
-     * Addresses should not be used for storing NetworkParameters. In the future Address will
-     * be an {@code interface} that only makes a {@link Network} available.
-     * @param address An address
-     * @return network parameters
-     * @deprecated You should be using {@link Address#network()} instead
-     */
-    @Deprecated
-    public static NetworkParameters fromAddress(Address address) {
-        return address.getParameters();
-    }
-
     public int getSpendableCoinbaseDepth() {
         return spendableCoinbaseDepth;
     }
@@ -297,7 +288,7 @@ public abstract class NetworkParameters {
      * The header bytes that identify the start of a packet on this network.
      * @return header bytes as a long
      */
-    public long getPacketMagic() {
+    public int getPacketMagic() {
         return packetMagic;
     }
 
@@ -305,6 +296,7 @@ public abstract class NetworkParameters {
      * First byte of a base58 encoded address. See {@link LegacyAddress}.
      * @return the header value
      */
+    @Deprecated
     public int getAddressHeader() {
         return addressHeader;
     }
@@ -313,6 +305,7 @@ public abstract class NetworkParameters {
      * First byte of a base58 encoded P2SH address.  P2SH addresses are defined as part of BIP0013.
      * @return the header value
      */
+    @Deprecated
     public int getP2SHHeader() {
         return p2shHeader;
     }
@@ -328,7 +321,9 @@ public abstract class NetworkParameters {
     /**
      * Human-readable part of bech32 encoded segwit address.
      * @return the human-readable part value
+     * @deprecated Use {@link Network#segwitAddressHrp()} or {@link org.bitcoinj.base.SegwitAddress.SegwitHrp}
      */
+    @Deprecated
     public String getSegwitAddressHrp() {
         return segwitAddressHrp;
     }
@@ -409,13 +404,6 @@ public abstract class NetworkParameters {
     public abstract Coin getMaxMoney();
 
     /**
-     * @return coin value
-     * @deprecated use {@link TransactionOutput#getMinNonDustValue()}
-     */
-    @Deprecated
-    public abstract Coin getMinNonDustOutput();
-
-    /**
      * The monetary object for this currency.
      * @return formatting utility object
      * @deprecated Get one another way or construct your own {@link MonetaryFormat} as needed.
@@ -456,7 +444,7 @@ public abstract class NetworkParameters {
                     // As the serializers are intended to be immutable, creating
                     // two due to a race condition should not be a problem, however
                     // to be safe we ensure only one exists for each network.
-                    this.defaultSerializer = getSerializer(false);
+                    this.defaultSerializer = getSerializer();
                 }
             }
         }
@@ -465,10 +453,9 @@ public abstract class NetworkParameters {
 
     /**
      * Construct and return a custom serializer.
-     * @param parseRetain whether the serializer should retain the backing byte array of a message for fast re-serialization.
      * @return the serializer
      */
-    public abstract BitcoinSerializer getSerializer(boolean parseRetain);
+    public abstract BitcoinSerializer getSerializer();
 
     /**
      * The number of blocks in the last {@link #getMajorityWindow()} blocks
@@ -538,7 +525,7 @@ public abstract class NetworkParameters {
     public EnumSet<Script.VerifyFlag> getTransactionVerificationFlags(final Block block,
             final Transaction transaction, final VersionTally tally, final Integer height) {
         final EnumSet<Script.VerifyFlag> verifyFlags = EnumSet.noneOf(Script.VerifyFlag.class);
-        if (block.getTimeSeconds() >= NetworkParameters.BIP16_ENFORCE_TIME)
+        if (!block.time().isBefore(NetworkParameters.BIP16_ENFORCE_TIME))
             verifyFlags.add(Script.VerifyFlag.P2SH);
 
         // Start enforcing CHECKLOCKTIMEVERIFY, (BIP65) for block.nVersion=4
@@ -551,25 +538,11 @@ public abstract class NetworkParameters {
         return verifyFlags;
     }
 
-    public abstract int getProtocolVersionNum(final ProtocolVersion version);
-
-    public static enum ProtocolVersion {
-        MINIMUM(70000),
-        PONG(60001),
-        BLOOM_FILTER(70000), // BIP37
-        BLOOM_FILTER_BIP111(70011), // BIP111
-        WITNESS_VERSION(70012),
-        FEEFILTER(70013), // BIP133
-        CURRENT(70013);
-
-        private final int bitcoinProtocol;
-
-        ProtocolVersion(final int bitcoinProtocol) {
-            this.bitcoinProtocol = bitcoinProtocol;
-        }
-
-        public int getBitcoinProtocolVersion() {
-            return bitcoinProtocol;
-        }
+    /**
+     * @deprecated  use {@link ProtocolVersion#intValue()}
+     */
+    @Deprecated
+    public int getProtocolVersionNum(final ProtocolVersion version) {
+        return version.intValue();
     }
 }

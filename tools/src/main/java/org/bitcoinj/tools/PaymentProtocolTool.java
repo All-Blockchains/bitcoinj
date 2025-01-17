@@ -16,13 +16,14 @@
 
 package org.bitcoinj.tools;
 
+import org.bitcoinj.base.internal.TimeUtils;
 import org.bitcoinj.crypto.TrustStoreLoader;
+import org.bitcoinj.protobuf.payments.Protos;
 import org.bitcoinj.protocols.payments.PaymentProtocol;
 import org.bitcoinj.protocols.payments.PaymentProtocolException;
 import org.bitcoinj.protocols.payments.PaymentSession;
 import org.bitcoinj.uri.BitcoinURI;
 import org.bitcoinj.uri.BitcoinURIParseException;
-import org.bitcoin.protocols.payments.Protos;
 
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -31,7 +32,7 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.security.KeyStoreException;
 import java.security.cert.X509Certificate;
-import java.util.Date;
+import java.time.Instant;
 import java.util.concurrent.ExecutionException;
 
 import static java.lang.String.format;
@@ -58,7 +59,7 @@ public class PaymentProtocolTool {
             } else if ("http".equals(uri.getScheme())) {
                 session = PaymentSession.createFromUrl(arg).get();
             } else if ("bitcoin".equals(uri.getScheme())) {
-                BitcoinURI bcuri = new BitcoinURI(arg);
+                BitcoinURI bcuri = BitcoinURI.of(arg);
                 final String paymentRequestUrl = bcuri.getPaymentRequestUrl();
                 if (paymentRequestUrl == null) {
                     System.err.println("No r= param in bitcoin URI");
@@ -71,14 +72,14 @@ public class PaymentProtocolTool {
             }
             final int version = session.getPaymentRequest().getPaymentDetailsVersion();
             StringBuilder output = new StringBuilder(
-                    format("Bitcoin payment request, version %d%nDate: %s%n", version, session.getDate()));
+                    format("Bitcoin payment request, version %d%nDate: %s%n", version, session.time()));
             PaymentProtocol.PkiVerificationData pki = PaymentProtocol.verifyPaymentRequestPki(
                     session.getPaymentRequest(), new TrustStoreLoader.DefaultTrustStoreLoader().getKeyStore());
             if (pki != null) {
                 output.append(format("Signed by: %s%nIdentity verified by: %s%n", pki.displayName, pki.rootAuthorityName));
             }
             if (session.getPaymentDetails().hasExpires()) {
-                output.append(format("Expires: %s%n", new Date(session.getPaymentDetails().getExpires() * 1000)));
+                output.append(format("Expires: %s%n", TimeUtils.dateTimeFormat(Instant.ofEpochSecond(session.getPaymentDetails().getExpires()))));
             }
             if (session.getMemo() != null) {
                 output.append(format("Memo: %s%n", session.getMemo()));

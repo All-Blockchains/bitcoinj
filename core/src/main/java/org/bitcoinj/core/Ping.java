@@ -1,6 +1,5 @@
 /*
- * Copyright 2011 Noa Resare
- * Copyright 2015 Andreas Schildbach
+ * Copyright by the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,61 +16,80 @@
 
 package org.bitcoinj.core;
 
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
+import java.util.Random;
 
 /**
- * <p>Instances of this class are not safe for use by multiple threads.</p>
+ * See <a href="https://github.com/bitcoin/bips/blob/master/bip-0031.mediawiki">BIP31</a> for details.
+ * <p>
+ * Instances of this class are immutable.
  */
-public class Ping extends Message {
-    private long nonce;
-    private boolean hasNonce;
-    
-    public Ping(NetworkParameters params, byte[] payloadBytes) throws ProtocolException {
-        super(params, payloadBytes, 0);
-    }
-    
+public class Ping extends BaseMessage {
+    private final long nonce;
+
     /**
-     * Create a Ping with a nonce value.
+     * Deserialize this message from a given payload.
+     *
+     * @param payload payload to deserialize from
+     * @return read message
+     * @throws BufferUnderflowException if the read message extends beyond the remaining bytes of the payload
+     */
+    public static Ping read(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
+        return new Ping(ByteUtils.readInt64(payload));
+    }
+
+    /**
+     * Create a ping with a nonce value.
      * Only use this if the remote node has a protocol version greater than 60000
+     *
+     * @param nonce nonce value
+     * @return ping message
      */
-    public Ping(long nonce) {
-        this.nonce = nonce;
-        this.hasNonce = true;
+    public static Ping of(long nonce) {
+        return new Ping(nonce);
     }
-    
+
     /**
-     * Create a Ping without a nonce value.
-     * Only use this if the remote node has a protocol version lower than or equal 60000
+     * Create a ping with a random nonce value.
+     * Only use this if the remote node has a protocol version greater than 60000
+     *
+     * @return ping message
      */
-    public Ping() {
-        this.hasNonce = false;
+    public static Ping random() {
+        long nonce = new Random().nextLong();
+        return new Ping(nonce);
     }
-    
-    @Override
-    public void bitcoinSerializeToStream(OutputStream stream) throws IOException {
-        if (hasNonce)
-            ByteUtils.int64ToByteStreamLE(nonce, stream);
+
+    private Ping(long nonce) {
+        this.nonce = nonce;
     }
 
     @Override
-    protected void parse() throws ProtocolException {
-        try {
-            nonce = readInt64();
-            hasNonce = true;
-        } catch(ProtocolException e) {
-            hasNonce = false;
-        }
-        length = hasNonce ? 8 : 0;
+    public void bitcoinSerializeToStream(OutputStream stream) throws IOException {
+        ByteUtils.writeInt64LE(nonce, stream);
     }
-    
+
+    /** @deprecated returns true */
+    @Deprecated
     public boolean hasNonce() {
-        return hasNonce;
+        return true;
     }
-    
-    public long getNonce() {
+
+    public long nonce() {
         return nonce;
+    }
+
+    /**
+     * Create a {@link Pong} reply to this ping.
+     *
+     * @return pong message
+     */
+    public Pong pong() {
+        return Pong.of(nonce);
     }
 }

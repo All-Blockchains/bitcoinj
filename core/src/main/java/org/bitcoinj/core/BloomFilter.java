@@ -19,24 +19,29 @@ package org.bitcoinj.core;
 
 import com.google.common.base.MoreObjects;
 import org.bitcoinj.base.Sha256Hash;
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.VarInt;
+import org.bitcoinj.base.internal.Buffers;
+import org.bitcoinj.base.internal.ByteUtils;
+import org.bitcoinj.crypto.ECKey;
 import org.bitcoinj.script.Script;
 import org.bitcoinj.script.ScriptChunk;
 import org.bitcoinj.script.ScriptPattern;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
-import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.Math.E;
 import static java.lang.Math.log;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 import static java.lang.Math.pow;
+import static org.bitcoinj.base.internal.Preconditions.checkArgument;
 
 /**
  * <p>A Bloom filter is a probabilistic data structure which can be sent to another client so that it can avoid
@@ -50,7 +55,7 @@ import static java.lang.Math.pow;
  * 
  * <p>Instances of this class are not safe for use by multiple threads.</p>
  */
-public class BloomFilter extends Message {
+public class BloomFilter extends BaseMessage {
     /** The BLOOM_UPDATE_* constants control when the bloom filter is auto-updated by the peer using
         it as a filter, either never, for all outputs or only for P2PK outputs (default) */
     public enum BloomUpdate {
@@ -61,9 +66,9 @@ public class BloomFilter extends Message {
     }
     
     private byte[] data;
-    private long hashFuncs;
-    private long nTweak;
-    private byte nFlags;
+    private final long hashFuncs;
+    private final int nTweak;
+    private final byte nFlags;
 
     // Same value as Bitcoin Core
     // A filter of 20,000 items and a false positive rate of 0.1% or one of 10,000 items and 0.0001% is just under 36,000 bytes
@@ -72,19 +77,31 @@ public class BloomFilter extends Message {
     private static final int MAX_HASH_FUNCS = 50;
 
     /**
-     * Construct a BloomFilter by deserializing payloadBytes
+     * Deserialize this message from a given payload.
+     *
+     * @param payload payload to deserialize from
+     * @return read message
+     * @throws BufferUnderflowException if the read message extends beyond the remaining bytes of the payload
      */
-    public BloomFilter(NetworkParameters params, byte[] payloadBytes) throws ProtocolException {
-        super(params, payloadBytes, 0);
+    public static BloomFilter read(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
+        byte[] data = Buffers.readLengthPrefixedBytes(payload);
+        if (data.length > MAX_FILTER_SIZE)
+            throw new ProtocolException("Bloom filter out of size range.");
+        long hashFuncs = ByteUtils.readUint32(payload);
+        if (hashFuncs > MAX_HASH_FUNCS)
+            throw new ProtocolException("Bloom filter hash function count out of range");
+        int nTweak = ByteUtils.readInt32(payload);
+        byte nFlags = payload.get();
+        return new BloomFilter(data, hashFuncs, nTweak, nFlags);
     }
-    
+
     /**
      * Constructs a filter with the given parameters which is updated on P2PK outputs only.
      */
-    public BloomFilter(int elements, double falsePositiveRate, long randomNonce) {
+    public BloomFilter(int elements, double falsePositiveRate, int randomNonce) {
         this(elements, falsePositiveRate, randomNonce, BloomUpdate.UPDATE_P2PUBKEY_ONLY);
     }
-    
+
     /**
      * <p>Constructs a new Bloom Filter which will provide approximately the given false positive rate when the given
      * number of elements have been inserted. If the filter would otherwise be larger than the maximum allowed size,
@@ -114,19 +131,26 @@ public class BloomFilter extends Message {
      * of this flag is to reduce network round-tripping and avoid over-dirtying the filter for the most common
      * wallet configurations.</p>
      */
-    public BloomFilter(int elements, double falsePositiveRate, long randomNonce, BloomUpdate updateFlag) {
+    public BloomFilter(int elements, double falsePositiveRate, int randomNonce, BloomUpdate updateFlag) {
         // The following formulas were stolen from Wikipedia's page on Bloom Filters (with the addition of min(..., MAX_...))
         //                        Size required for a given number of elements and false-positive rate
         int size = (int)(-1  / (pow(log(2), 2)) * elements * log(falsePositiveRate));
         size = max(1, min(size, (int) MAX_FILTER_SIZE * 8) / 8);
         data = new byte[size];
         // Optimal number of hash functions for a given filter size and element count.
-        hashFuncs = (int)(data.length * 8 / (double)elements * log(2));
-        hashFuncs = max(1, min(hashFuncs, MAX_HASH_FUNCS));
+        long numHashFuncs = (int)(data.length * 8 / (double)elements * log(2));
+        this.hashFuncs = max(1, min(numHashFuncs, MAX_HASH_FUNCS));
         this.nTweak = randomNonce;
         this.nFlags = (byte)(0xff & updateFlag.ordinal());
     }
-    
+
+    private BloomFilter(byte[] data, long hashFuncs, int nTweak, byte nFlags) {
+        this.data = data;
+        this.hashFuncs = hashFuncs;
+        this.nTweak = nTweak;
+        this.nFlags = nFlags;
+    }
+
     /**
      * Returns the theoretical false positive rate of this filter if were to contain the given number of elements.
      */
@@ -143,28 +167,15 @@ public class BloomFilter extends Message {
         return helper.toString();
     }
 
-    @Override
-    protected void parse() throws ProtocolException {
-        data = readByteArray();
-        if (data.length > MAX_FILTER_SIZE)
-            throw new ProtocolException ("Bloom filter out of size range.");
-        hashFuncs = readUint32();
-        if (hashFuncs > MAX_HASH_FUNCS)
-            throw new ProtocolException("Bloom filter hash function count out of range");
-        nTweak = readUint32();
-        nFlags = readBytes(1)[0];
-        length = cursor - offset;
-    }
-    
     /**
-     * Serializes this message to the provided stream. If you just want the raw bytes use bitcoinSerialize().
+     * Serializes this message to the provided stream. If you just want the raw bytes use {@link #serialize()}.
      */
     @Override
     protected void bitcoinSerializeToStream(OutputStream stream) throws IOException {
-        stream.write(new VarInt(data.length).encode());
+        stream.write(VarInt.of(data.length).serialize());
         stream.write(data);
-        ByteUtils.uint32ToByteStreamLE(hashFuncs, stream);
-        ByteUtils.uint32ToByteStreamLE(nTweak, stream);
+        ByteUtils.writeInt32LE(hashFuncs, stream);
+        ByteUtils.writeInt32LE(nTweak, stream);
         stream.write(nFlags);
     }
 
@@ -253,7 +264,7 @@ public class BloomFilter extends Message {
 
     /** Inserts the given transaction outpoint. */
     public synchronized void insert(TransactionOutPoint outpoint) {
-        insert(outpoint.unsafeBitcoinSerialize());
+        insert(outpoint.serialize());
     }
 
     /**
@@ -328,8 +339,8 @@ public class BloomFilter extends Message {
                 matched.add(tx);
             }
         }
-        PartialMerkleTree pmt = PartialMerkleTree.buildFromLeaves(block.getParams(), bits, txHashes);
-        FilteredBlock filteredBlock = new FilteredBlock(block.getParams(), block.cloneAsHeader(), pmt);
+        PartialMerkleTree pmt = PartialMerkleTree.buildFromLeaves(bits, txHashes);
+        FilteredBlock filteredBlock = new FilteredBlock(block.cloneAsHeader(), pmt);
         for (Transaction transaction : matched)
             filteredBlock.provideTransaction(transaction);
         return filteredBlock;
@@ -342,7 +353,7 @@ public class BloomFilter extends Message {
         BloomUpdate flag = getUpdateFlag();
         for (TransactionOutput output : tx.getOutputs()) {
             Script script = output.getScriptPubKey();
-            for (ScriptChunk chunk : script.getChunks()) {
+            for (ScriptChunk chunk : script.chunks()) {
                 if (!chunk.isPushData())
                     continue;
                 if (contains(chunk.data)) {
@@ -355,10 +366,10 @@ public class BloomFilter extends Message {
         }
         if (found) return true;
         for (TransactionInput input : tx.getInputs()) {
-            if (contains(input.getOutpoint().unsafeBitcoinSerialize())) {
+            if (contains(input.getOutpoint().serialize())) {
                 return true;
             }
-            for (ScriptChunk chunk : input.getScriptSig().getChunks()) {
+            for (ScriptChunk chunk : input.getScriptSig().chunks()) {
                 if (chunk.isPushData() && contains(chunk.data))
                     return true;
             }

@@ -16,18 +16,18 @@
 
 package org.bitcoinj.protocols.payments;
 
-import org.bitcoin.protocols.payments.Protos;
-import org.bitcoin.protocols.payments.Protos.Payment;
-import org.bitcoin.protocols.payments.Protos.PaymentACK;
-import org.bitcoin.protocols.payments.Protos.PaymentRequest;
+import org.bitcoinj.protobuf.payments.Protos;
+import org.bitcoinj.protobuf.payments.Protos.Payment;
+import org.bitcoinj.protobuf.payments.Protos.PaymentACK;
+import org.bitcoinj.protobuf.payments.Protos.PaymentRequest;
 import org.bitcoinj.base.BitcoinNetwork;
 import org.bitcoinj.base.ScriptType;
-import org.bitcoinj.core.Address;
+import org.bitcoinj.base.Address;
 import org.bitcoinj.base.Coin;
-import org.bitcoinj.core.ECKey;
+import org.bitcoinj.base.internal.TimeUtils;
+import org.bitcoinj.crypto.ECKey;
 import org.bitcoinj.core.NetworkParameters;
 import org.bitcoinj.core.Transaction;
-import org.bitcoinj.core.Utils;
 import org.bitcoinj.crypto.X509Utils;
 import org.bitcoinj.params.TestNet3Params;
 import org.bitcoinj.protocols.payments.PaymentProtocol.Output;
@@ -101,7 +101,7 @@ public class PaymentProtocolTest {
 
     private Protos.PaymentRequest minimalPaymentRequest() {
         Protos.PaymentDetails.Builder paymentDetails = Protos.PaymentDetails.newBuilder();
-        paymentDetails.setTime(Utils.currentTimeSeconds());
+        paymentDetails.setTime(TimeUtils.currentTime().getEpochSecond());
         Protos.PaymentRequest.Builder paymentRequest = Protos.PaymentRequest.newBuilder();
         paymentRequest.setSerializedPaymentDetails(paymentDetails.build().toByteString());
         return paymentRequest.build();
@@ -120,7 +120,7 @@ public class PaymentProtocolTest {
         final List<Output> parsedOutputs = parsedPaymentRequest.getOutputs();
         assertEquals(1, parsedOutputs.size());
         assertEquals(AMOUNT, parsedOutputs.get(0).amount);
-        assertArrayEquals(ScriptBuilder.createOutputScript(TO_ADDRESS).getProgram(), parsedOutputs.get(0).scriptData);
+        assertArrayEquals(ScriptBuilder.createOutputScript(TO_ADDRESS).program(), parsedOutputs.get(0).scriptData);
         assertEquals(MEMO, parsedPaymentRequest.getMemo());
         assertEquals(PAYMENT_URL, parsedPaymentRequest.getPaymentUrl());
         assertArrayEquals(MERCHANT_DATA, parsedPaymentRequest.getMerchantData());
@@ -130,7 +130,7 @@ public class PaymentProtocolTest {
     public void testPaymentMessage() throws Exception {
         // Create
         List<Transaction> transactions = new LinkedList<>();
-        transactions.add(FakeTxBuilder.createFakeTx(TESTNET, AMOUNT, TO_ADDRESS));
+        transactions.add(FakeTxBuilder.createFakeTx(TESTNET.network(), AMOUNT, TO_ADDRESS));
         Coin refundAmount = Coin.SATOSHI;
         Address refundAddress = new ECKey().toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET);
         Payment payment = PaymentProtocol.createPaymentMessage(transactions, refundAmount, refundAddress, MEMO,

@@ -18,7 +18,7 @@
 package org.bitcoinj.params;
 
 import org.bitcoinj.base.BitcoinNetwork;
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 import org.bitcoinj.core.Block;
 import org.bitcoinj.core.NetworkParameters;
 import org.bitcoinj.base.Sha256Hash;
@@ -28,9 +28,9 @@ import org.bitcoinj.store.BlockStore;
 import org.bitcoinj.store.BlockStoreException;
 
 import java.math.BigInteger;
-import java.util.Date;
+import java.time.Instant;
 
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * Parameters for the testnet, a separate public instance of Bitcoin that has relaxed rules suitable for development
@@ -40,7 +40,7 @@ public class TestNet3Params extends BitcoinNetworkParams {
     public static final int TESTNET_MAJORITY_WINDOW = 100;
     public static final int TESTNET_MAJORITY_REJECT_BLOCK_OUTDATED = 75;
     public static final int TESTNET_MAJORITY_ENFORCE_BLOCK_UPGRADE = 51;
-    private static final long GENESIS_TIME = 1296688602;
+    private static final Instant GENESIS_TIME = Instant.ofEpochSecond(1296688602);
     private static final long GENESIS_NONCE = 414098458;
     private static final Sha256Hash GENESIS_HASH = Sha256Hash.wrap("000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943");
 
@@ -68,7 +68,7 @@ public class TestNet3Params extends BitcoinNetworkParams {
 
         dnsSeeds = new String[] {
                 "testnet-seed.bitcoin.jonasschnelli.ch", // Jonas Schnelli
-                "seed.tbtc.petertodd.org",               // Peter Todd
+                "seed.tbtc.petertodd.net",               // Peter Todd
                 "seed.testnet.bitcoin.sprovoost.nl",     // Sjors Provoost
                 "testnet-seed.bluematt.me",              // Matt Corallo
         };
@@ -88,29 +88,27 @@ public class TestNet3Params extends BitcoinNetworkParams {
     public Block getGenesisBlock() {
         synchronized (GENESIS_HASH) {
             if (genesisBlock == null) {
-                genesisBlock = Block.createGenesis(this);
-                genesisBlock.setDifficultyTarget(Block.STANDARD_MAX_DIFFICULTY_TARGET);
-                genesisBlock.setTime(GENESIS_TIME);
-                genesisBlock.setNonce(GENESIS_NONCE);
-                checkState(genesisBlock.getHash().equals(GENESIS_HASH), "Invalid genesis hash");
+                genesisBlock = Block.createGenesis(GENESIS_TIME, Block.STANDARD_MAX_DIFFICULTY_TARGET, GENESIS_NONCE);
+                checkState(genesisBlock.getHash().equals(GENESIS_HASH), () ->
+                        "invalid genesis hash");
             }
         }
         return genesisBlock;
     }
 
     // February 16th 2012
-    private static final Date testnetDiffDate = new Date(1329264000000L);
+    private static final Instant testnetDiffDate = Instant.ofEpochMilli(1329264000000L);
 
     @Override
     public void checkDifficultyTransitions(final StoredBlock storedPrev, final Block nextBlock,
         final BlockStore blockStore) throws VerificationException, BlockStoreException {
-        if (!isDifficultyTransitionPoint(storedPrev.getHeight()) && nextBlock.getTime().after(testnetDiffDate)) {
+        if (!isDifficultyTransitionPoint(storedPrev.getHeight()) && nextBlock.time().isAfter(testnetDiffDate)) {
             Block prev = storedPrev.getHeader();
 
             // After 15th February 2012 the rules on the testnet change to avoid people running up the difficulty
             // and then leaving, making it too hard to mine a block. On non-difficulty transition points, easy
             // blocks are allowed if there has been a span of 20 minutes without one.
-            final long timeDelta = nextBlock.getTimeSeconds() - prev.getTimeSeconds();
+            final long timeDelta = nextBlock.time().getEpochSecond() - prev.time().getEpochSecond();
             // There is an integer underflow bug in bitcoin-qt that means mindiff blocks are accepted when time
             // goes backwards.
             if (timeDelta >= 0 && timeDelta <= NetworkParameters.TARGET_SPACING * 2) {

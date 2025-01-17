@@ -16,9 +16,9 @@
 
 package org.bitcoinj.net;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Throwables;
 import com.google.common.util.concurrent.AbstractExecutionThreadService;
+import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
@@ -35,12 +35,13 @@ import java.util.Iterator;
  * process data.
  */
 public class NioServer extends AbstractExecutionThreadService {
-    private static final org.slf4j.Logger log = LoggerFactory.getLogger(NioServer.class);
+    private static final Logger log = LoggerFactory.getLogger(NioServer.class);
 
     private final StreamConnectionFactory connectionFactory;
 
     private final ServerSocketChannel sc;
-    @VisibleForTesting final Selector selector;
+    // For testing only
+    final Selector selector;
 
     // Handle a SelectionKey which was selected
     private void handleKey(Selector selector, SelectionKey key) throws IOException {

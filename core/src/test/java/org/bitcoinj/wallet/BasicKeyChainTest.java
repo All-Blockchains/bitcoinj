@@ -17,26 +17,29 @@
 package org.bitcoinj.wallet;
 
 import com.google.common.collect.Lists;
+import org.bitcoinj.base.internal.TimeUtils;
 import org.bitcoinj.core.BloomFilter;
-import org.bitcoinj.core.ECKey;
-import org.bitcoinj.core.Utils;
+import org.bitcoinj.crypto.ECKey;
 import org.bitcoinj.crypto.KeyCrypter;
 import org.bitcoinj.crypto.KeyCrypterException;
 import org.bitcoinj.crypto.KeyCrypterScrypt;
 import org.bitcoinj.utils.Threading;
 import org.bitcoinj.wallet.listeners.AbstractKeyChainEventListener;
+import org.bitcoinj.protobuf.wallet.Protos;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Date;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -66,10 +69,10 @@ public class BasicKeyChainTest {
 
     @Test
     public void importKeys() {
-        Utils.setMockClock();
-        long now = Utils.currentTimeSeconds();
+        Instant now = TimeUtils.currentTime().truncatedTo(ChronoUnit.SECONDS);
+        TimeUtils.setMockClock(now);
         final ECKey key1 = new ECKey();
-        Utils.rollMockClock(86400);
+        TimeUtils.rollMockClock(Duration.ofDays(1));
         final ECKey key2 = new ECKey();
         final ArrayList<ECKey> keys = Lists.newArrayList(key1, key2);
 
@@ -78,7 +81,7 @@ public class BasicKeyChainTest {
         assertEquals(2, chain.numKeys());
         assertTrue(onKeysAddedRan.getAndSet(false));
         assertArrayEquals(keys.toArray(), onKeysAdded.get().toArray());
-        assertEquals(now, chain.getEarliestKeyCreationTime());
+        assertEquals(now, chain.earliestKeyCreationTime());
         // Check we ignore duplicates.
         final ECKey newKey = new ECKey();
         keys.add(newKey);
@@ -195,10 +198,10 @@ public class BasicKeyChainTest {
 
     @Test
     public void serializationUnencrypted() throws UnreadableWalletException {
-        Utils.setMockClock();
-        Date now = Utils.now();
+        TimeUtils.setMockClock();
+        Instant now = TimeUtils.currentTime();
         final ECKey key1 = new ECKey();
-        Utils.rollMockClock(5000);
+        TimeUtils.rollMockClock(Duration.ofSeconds(5000));
         final ECKey key2 = new ECKey();
         chain.importKeys(Arrays.asList(key1, key2));
         List<Protos.Key> keys = chain.serializeToProtobuf();
@@ -207,9 +210,9 @@ public class BasicKeyChainTest {
         assertArrayEquals(key2.getPubKey(), keys.get(1).getPublicKey().toByteArray());
         assertArrayEquals(key1.getPrivKeyBytes(), keys.get(0).getSecretBytes().toByteArray());
         assertArrayEquals(key2.getPrivKeyBytes(), keys.get(1).getSecretBytes().toByteArray());
-        long normTime = (long) (Math.floor(now.getTime() / 1000) * 1000);
-        assertEquals(normTime, keys.get(0).getCreationTimestamp());
-        assertEquals(normTime + 5000 * 1000, keys.get(1).getCreationTimestamp());
+        Instant normTime = now.truncatedTo(ChronoUnit.SECONDS);
+        assertEquals(normTime, Instant.ofEpochMilli(keys.get(0).getCreationTimestamp()));
+        assertEquals(normTime.plusSeconds(5000), Instant.ofEpochMilli(keys.get(1).getCreationTimestamp()));
 
         chain = BasicKeyChain.fromProtobufUnencrypted(keys);
         assertEquals(2, chain.getKeys().size());
@@ -228,7 +231,7 @@ public class BasicKeyChainTest {
         assertArrayEquals(key1.getPubKey(), keys.get(0).getPublicKey().toByteArray());
         assertFalse(keys.get(0).hasSecretBytes());
         assertTrue(keys.get(0).hasEncryptedData());
-        chain = BasicKeyChain.fromProtobufEncrypted(keys, checkNotNull(chain.getKeyCrypter()));
+        chain = BasicKeyChain.fromProtobufEncrypted(keys, Objects.requireNonNull(chain.getKeyCrypter()));
         assertEquals(key1.getEncryptedPrivateKey(), chain.getKeys().get(0).getEncryptedPrivateKey());
         assertTrue(chain.checkPassword("foo bar"));
     }
@@ -275,20 +278,20 @@ public class BasicKeyChainTest {
 
     @Test
     public void keysBeforeAndAfter() {
-        Utils.setMockClock();
-        long now = Utils.currentTimeSeconds();
+        TimeUtils.setMockClock();
+        Instant now = TimeUtils.currentTime();
         final ECKey key1 = new ECKey();
-        Utils.rollMockClock(86400);
+        TimeUtils.rollMockClock(Duration.ofDays(1));
         final ECKey key2 = new ECKey();
         final List<ECKey> keys = Lists.newArrayList(key1, key2);
         assertEquals(2, chain.importKeys(keys));
 
-        assertNull(chain.findOldestKeyAfter(now + 86400 * 2));
-        assertEquals(key1, chain.findOldestKeyAfter(now - 1));
-        assertEquals(key2, chain.findOldestKeyAfter(now + 86400 - 1));
+        assertFalse(chain.findOldestKeyAfter(now.plus(2, ChronoUnit.DAYS)).isPresent());
+        assertEquals(key1, chain.findOldestKeyAfter(now.minusSeconds(1)).get());
+        assertEquals(key2, chain.findOldestKeyAfter(now.plus(1, ChronoUnit.DAYS).minusSeconds(1)).get());
 
-        assertEquals(2, chain.findKeysBefore(now + 86400 * 2).size());
-        assertEquals(1, chain.findKeysBefore(now + 1).size());
-        assertEquals(0, chain.findKeysBefore(now - 1).size());
+        assertEquals(2, chain.findKeysBefore(now.plus(2, ChronoUnit.DAYS)).size());
+        assertEquals(1, chain.findKeysBefore(now.plusSeconds(1)).size());
+        assertEquals(0, chain.findKeysBefore(now.minusSeconds(1)).size());
     }
 }

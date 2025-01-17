@@ -18,26 +18,29 @@
 
 package org.bitcoinj.script;
 
-import org.bitcoinj.core.Address;
-import org.bitcoinj.core.ECKey;
-import org.bitcoinj.core.LegacyAddress;
-import org.bitcoinj.core.SegwitAddress;
+import org.bitcoinj.base.Address;
+import org.bitcoinj.base.internal.TimeUtils;
+import org.bitcoinj.crypto.ECKey;
+import org.bitcoinj.base.LegacyAddress;
+import org.bitcoinj.base.SegwitAddress;
 import org.bitcoinj.base.Sha256Hash;
 import org.bitcoinj.core.Transaction;
-import org.bitcoinj.core.Utils;
 import org.bitcoinj.crypto.TransactionSignature;
 import org.bitcoinj.base.ScriptType;
+import org.bitcoinj.crypto.internal.CryptoUtils;
 
 import javax.annotation.Nullable;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Stack;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkArgument;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 import static org.bitcoinj.script.ScriptOpCodes.OP_0;
 import static org.bitcoinj.script.ScriptOpCodes.OP_1NEGATE;
 import static org.bitcoinj.script.ScriptOpCodes.OP_CHECKMULTISIG;
@@ -58,6 +61,13 @@ import static org.bitcoinj.script.ScriptOpCodes.OP_RETURN;
  */
 public class ScriptBuilder {
     private final List<ScriptChunk> chunks;
+    /**
+     * If this is set, the script to be built is associated with a creation time. This is currently used in the
+     * context of watching wallets only, where the scriptPubKeys being watched actually represent public keys and
+     * their addresses.
+     */
+    @Nullable
+    private Instant creationTime = null;
 
     /** Creates a fresh ScriptBuilder with an empty program. */
     public ScriptBuilder() {
@@ -66,7 +76,19 @@ public class ScriptBuilder {
 
     /** Creates a fresh ScriptBuilder with the given program as the starting point. */
     public ScriptBuilder(Script template) {
-        chunks = new ArrayList<>(template.getChunks());
+        chunks = new ArrayList<>(template.chunks());
+    }
+
+    /**
+     * Associates this script to be built with a given creation time. This is currently used in the context of
+     * watching wallets only, where the scriptPubKeys being watched actually represent public keys and their addresses.
+     *
+     * @param creationTime creation time to associate the script with
+     * @return this builder
+     */
+    public ScriptBuilder creationTime(Instant creationTime) {
+        this.creationTime = Objects.requireNonNull(creationTime);
+        return this;
     }
 
     /** Adds the given chunk to the end of the program */
@@ -174,8 +196,10 @@ public class ScriptBuilder {
      * @see #number(long)
      */
     public ScriptBuilder smallNum(int index, int num) {
-        checkArgument(num >= 0, "Cannot encode negative numbers with smallNum");
-        checkArgument(num <= 16, "Cannot encode numbers larger than 16 with smallNum");
+        checkArgument(num >= 0, () ->
+                "cannot encode negative numbers with smallNum");
+        checkArgument(num <= 16, () ->
+                "cannot encode numbers larger than 16 with smallNum");
         return addChunk(index, new ScriptChunk(Script.encodeToOpN(num), null));
     }
 
@@ -260,7 +284,10 @@ public class ScriptBuilder {
 
     /** Creates a new immutable Script based on the state of the builder. */
     public Script build() {
-        return new Script(chunks);
+        if (creationTime != null)
+            return Script.of(chunks, creationTime);
+        else
+            return Script.of(chunks);
     }
 
     /** Creates an empty script. */
@@ -268,26 +295,50 @@ public class ScriptBuilder {
         return new ScriptBuilder().build();
     }
 
-    /** Creates a scriptPubKey that encodes payment to the given address. */
+    /**
+     * Creates a scriptPubKey that encodes payment to the given address.
+     *
+     * @param to           address to send payment to
+     * @param creationTime creation time of the scriptPubKey
+     * @return scriptPubKey
+     */
+    public static Script createOutputScript(Address to, Instant creationTime) {
+        return new ScriptBuilder().outputScript(to).creationTime(creationTime).build();
+    }
+
+    /**
+     * Creates a scriptPubKey that encodes payment to the given address.
+     *
+     * @param to address to send payment to
+     * @return scriptPubKey
+     */
     public static Script createOutputScript(Address to) {
+        return new ScriptBuilder().outputScript(to).build();
+    }
+
+    private ScriptBuilder outputScript(Address to) {
+        checkState(chunks.isEmpty());
         if (to instanceof LegacyAddress) {
             ScriptType scriptType = to.getOutputScriptType();
             if (scriptType == ScriptType.P2PKH)
-                return createP2PKHOutputScript(to.getHash());
+                p2pkhOutputScript(((LegacyAddress) to).getHash());
             else if (scriptType == ScriptType.P2SH)
-                return createP2SHOutputScript(to.getHash());
+                p2shOutputScript(((LegacyAddress) to).getHash());
             else
                 throw new IllegalStateException("Cannot handle " + scriptType);
         } else if (to instanceof SegwitAddress) {
-            ScriptBuilder builder = new ScriptBuilder();
-            // OP_0 <pubKeyHash|scriptHash>
-            SegwitAddress toSegwit = (SegwitAddress) to;
-            builder.smallNum(toSegwit.getWitnessVersion());
-            builder.data(toSegwit.getWitnessProgram());
-            return builder.build();
+            p2whOutputScript((SegwitAddress) to);
         } else {
             throw new IllegalStateException("Cannot handle " + to);
         }
+        return this;
+    }
+
+    private ScriptBuilder p2whOutputScript(SegwitAddress address) {
+        checkState(chunks.isEmpty());
+        // OP_0 <pubKeyHash|scriptHash>
+        return smallNum(address.getWitnessVersion())
+                .data(address.getWitnessProgram());
     }
 
     /**
@@ -361,7 +412,7 @@ public class ScriptBuilder {
                 sigs.add(signature.encodeToBitcoin());
             }
         }
-        return createMultiSigInputScriptBytes(sigs, multisigProgram.getProgram());
+        return createMultiSigInputScriptBytes(sigs, multisigProgram.program());
     }
 
     /**
@@ -392,14 +443,15 @@ public class ScriptBuilder {
     public static Script updateScriptWithSignature(Script scriptSig, byte[] signature, int targetIndex,
                                                    int sigsPrefixCount, int sigsSuffixCount) {
         ScriptBuilder builder = new ScriptBuilder();
-        List<ScriptChunk> inputChunks = scriptSig.getChunks();
+        List<ScriptChunk> inputChunks = scriptSig.chunks();
         int totalChunks = inputChunks.size();
 
         // Check if we have a place to insert, otherwise just return given scriptSig unchanged.
         // We assume here that OP_0 placeholders always go after the sigs, so
         // to find if we have sigs missing, we can just check the chunk in latest sig position
         boolean hasMissingSigs = inputChunks.get(totalChunks - sigsSuffixCount - 1).equalsOpCode(OP_0);
-        checkArgument(hasMissingSigs, "ScriptSig is already filled with signatures");
+        checkArgument(hasMissingSigs, () ->
+                "scriptSig is already filled with signatures");
 
         // copy the prefix
         for (ScriptChunk chunk: inputChunks.subList(0, sigsPrefixCount))
@@ -454,14 +506,17 @@ public class ScriptBuilder {
      * Creates a scriptPubKey that sends to the given public key hash.
      */
     public static Script createP2PKHOutputScript(byte[] hash) {
+        return new ScriptBuilder().p2pkhOutputScript(hash).build();
+    }
+
+    private ScriptBuilder p2pkhOutputScript(byte[] hash) {
         checkArgument(hash.length == LegacyAddress.LENGTH);
-        ScriptBuilder builder = new ScriptBuilder();
-        builder.op(OP_DUP);
-        builder.op(OP_HASH160);
-        builder.data(hash);
-        builder.op(OP_EQUALVERIFY);
-        builder.op(OP_CHECKSIG);
-        return builder.build();
+        checkState(chunks.isEmpty());
+        return op(OP_DUP)
+                .op(OP_HASH160)
+                .data(hash)
+                .op(OP_EQUALVERIFY)
+                .op(OP_CHECKSIG);
     }
 
     /**
@@ -497,8 +552,15 @@ public class ScriptBuilder {
      * @return an output script that sends to the redeem script
      */
     public static Script createP2SHOutputScript(byte[] hash) {
+        return new ScriptBuilder().p2shOutputScript(hash).build();
+    }
+
+    private ScriptBuilder p2shOutputScript(byte[] hash) {
         checkArgument(hash.length == 20);
-        return new ScriptBuilder().op(OP_HASH160).data(hash).op(OP_EQUAL).build();
+        checkState(chunks.isEmpty());
+        return op(OP_HASH160)
+                .data(hash)
+                .op(OP_EQUAL);
     }
 
     /**
@@ -508,7 +570,7 @@ public class ScriptBuilder {
      * @return an output script that sends to the redeem script
      */
     public static Script createP2SHOutputScript(Script redeemScript) {
-        byte[] hash = Utils.sha256hash160(redeemScript.getProgram());
+        byte[] hash = CryptoUtils.sha256hash160(redeemScript.program());
         return ScriptBuilder.createP2SHOutputScript(hash);
     }
 
@@ -524,7 +586,7 @@ public class ScriptBuilder {
      * Creates a segwit scriptPubKey for the given redeem script.
      */
     public static Script createP2WSHOutputScript(Script redeemScript) {
-        byte[] hash = Sha256Hash.hash(redeemScript.getProgram());
+        byte[] hash = Sha256Hash.hash(redeemScript.program());
         return ScriptBuilder.createP2WSHOutputScript(hash);
     }
 

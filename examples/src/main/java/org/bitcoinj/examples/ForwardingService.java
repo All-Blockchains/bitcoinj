@@ -16,134 +16,99 @@
 
 package org.bitcoinj.examples;
 
+import org.bitcoinj.base.Address;
+import org.bitcoinj.base.AddressParser;
 import org.bitcoinj.base.BitcoinNetwork;
-import org.bitcoinj.base.ScriptType;
-import org.bitcoinj.base.Sha256Hash;
-import org.bitcoinj.core.Address;
 import org.bitcoinj.base.Coin;
-import org.bitcoinj.core.AddressParser;
 import org.bitcoinj.core.Context;
-import org.bitcoinj.core.DefaultAddressParser;
-import org.bitcoinj.core.InsufficientMoneyException;
 import org.bitcoinj.core.Transaction;
 import org.bitcoinj.core.TransactionBroadcast;
-import org.bitcoinj.core.TransactionConfidence;
-import org.bitcoinj.crypto.KeyCrypterException;
 import org.bitcoinj.kits.WalletAppKit;
 import org.bitcoinj.utils.BriefLogFormatter;
-import org.bitcoinj.wallet.CoinSelection;
 import org.bitcoinj.wallet.CoinSelector;
-import org.bitcoinj.wallet.KeyChainGroupStructure;
 import org.bitcoinj.wallet.SendRequest;
 import org.bitcoinj.wallet.Wallet;
 import org.bitcoinj.wallet.listeners.WalletCoinsReceivedEventListener;
 
+import java.io.Closeable;
 import java.io.File;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
-import static java.util.stream.Collectors.collectingAndThen;
-import static java.util.stream.Collectors.toList;
-
 /**
- * ForwardingService demonstrates basic usage of the library. It sits on the network and when it receives coins, simply
- * sends them onwards to an address given on the command line.
+ * ForwardingService demonstrates basic usage of bitcoinj. It creates an SPV Wallet, listens on the network
+ * and when it receives coins, simply sends them onwards to the address given on the command line.
  */
-public class ForwardingService implements AutoCloseable {
-    static final String USAGE = "Usage: address-to-send-back-to [mainnet|testnet|signet|regtest]";
+public class ForwardingService implements Closeable {
+    static private final String NETS = String.join("|", BitcoinNetwork.strings());
+    static final String USAGE = String.format("Usage: address-to-forward-to [%s]", NETS);
     static final int REQUIRED_CONFIRMATIONS = 1;
     static final int MAX_CONNECTIONS = 4;
     private final BitcoinNetwork network;
     private final Address forwardingAddress;
-    private final WalletAppKit kit;
-    private final WalletCoinsReceivedEventListener listener;
+    private volatile WalletAppKit kit;
+    /* We need to save the listener object (created by a method reference) so we can remove it later */
+    private final WalletCoinsReceivedEventListener coinsReceivedListener = this::coinForwardingListener;
 
-    public static void main(String[] args) {
+    /**
+     * Run the forwarding service as a command line tool
+     * @param args See {@link #USAGE}
+     */
+    public static void main(String[] args) throws InterruptedException {
         // This line makes the log output more compact and easily read, especially when using the JDK log adapter.
         BriefLogFormatter.init();
         Context.propagate(new Context());
 
-        if (args.length < 1) {
+        if (args.length < 1 || args.length > 2) {
             System.err.println(USAGE);
-            throw new IllegalArgumentException("Address required");
+            System.exit(1);
         }
 
-        // Figure out which network we should connect to. Each network gets its own set of files.
-        Address address;
-        BitcoinNetwork network;
-        AddressParser addressParser = new DefaultAddressParser();
-        if (args.length >= 2) {
-            // Verify address belongs to network
-            network = BitcoinNetwork.fromString(args[1]).orElseThrow();
-            address = addressParser.parseAddress(args[0], network);
-        } else {
-            // Infer network from address
-            address = addressParser.parseAddressAnyNetwork(args[0]);
-            network = (BitcoinNetwork) address.network();
-        }
-
-        forward(new File("."), network, address);
-    }
-
-    public static void forward(File directory, BitcoinNetwork network, Address address) {
-        System.out.println("Network: " + network.id());
-        System.out.println("Forwarding address: " + address);
-
-        // Create the Service (and WalletKit)
-        try (ForwardingService forwardingService = new ForwardingService(directory, address, network)) {
-            // Start the Service (and WalletKit)
-            forwardingService.start();
-
-            // After we start listening, we can tell the user the receiving address
-            System.out.printf("Waiting to receive coins on: %s\n", forwardingService.receivingAddress());
-            System.out.println("Press Ctrl-C to quit.");
-
-            try {
-                Thread.sleep(Long.MAX_VALUE);
-            } catch (InterruptedException ignored) {}
+        // Create and run the service, which will listen for transactions and forward coins until stopped
+        try (ForwardingService forwardingService = new ForwardingService(args)) {
+            forwardingService.run();
+            // Wait for Control-C
+            Thread.sleep(Long.MAX_VALUE);
         }
     }
 
     /**
-     * Forwarding service. Creating this object creates the {@link WalletAppKit} object.
+     * Initialize by parsing the network and forwarding address command-line arguments.
      *
-     * @param directory directory for .wallet and .chain files
-     * @param forwardingAddress forwarding destination
-     * @param network Network to listen on
+     * @param args the arguments from {@link #main(String[])}
      */
-    public ForwardingService(File directory, Address forwardingAddress, BitcoinNetwork network) {
-        this.forwardingAddress = forwardingAddress;
-        this.network = network;
-        listener = this::coinsReceivedListener;
-        // Start up a basic app using a class that automates some boilerplate.
-        kit = new WalletAppKit(network,
-                ScriptType.P2WPKH,
-                KeyChainGroupStructure.BIP32,
-                directory,
-                getPrefix(network));
-    }
-
-    /**
-     * Start the WalletAppKit
-     */
-    public void start() {
-        if (network == BitcoinNetwork.REGTEST) {
-            // Regression test mode is designed for testing and development only, so there's no public network for it.
-            // If you pick this mode, you're expected to be running a local "bitcoind -regtest" instance.
-            kit.connectToLocalHost();
+    public ForwardingService(String[] args) {
+        forwardingAddress = AddressParser.getDefault().parseAddress(args[0]);
+        if (args.length >= 2) {
+            // If network was specified, validate address against network
+            network = BitcoinNetwork.fromString(args[1]).orElseThrow();
+            network.checkAddress(forwardingAddress);
+        } else {
+            // Else network not-specified, extract network from address
+            network = (BitcoinNetwork) forwardingAddress.network();
         }
-
-        kit.setBlockingStartup(false);  // Don't wait for blockchain synchronization before entering RUNNING state
-        kit.startAsync();               // Connect to the network and start downloading transactions
-        kit.awaitRunning();             // Wait for the service to reach the RUNNING state
-        kit.peerGroup().setMaxConnections(MAX_CONNECTIONS);
-
-        // Start listening and forwarding
-        kit.wallet().addCoinsReceivedEventListener(listener);
     }
 
     /**
-     * Close the service. {@link AutoCloseable} will be triggered if an unhandled exception occurs within
-     * a <i>try-with-resources</i> block.
+     * Start the wallet and register the coin-forwarding listener.
+     */
+    public void run() {
+        System.out.println("Network: " + network);
+        System.out.println("Forwarding address: " + forwardingAddress);
+
+        // Create and start the WalletKit
+        kit = WalletAppKit.launch(network, new File("."), getPrefix(network), MAX_CONNECTIONS);
+
+        // Add a listener that forwards received coins
+        kit.wallet().addCoinsReceivedEventListener(coinsReceivedListener);
+
+        // After we start listening, we can tell the user the receiving address
+        System.out.printf("Waiting to receive coins on: %s\n", kit.wallet().currentReceiveAddress());
+        System.out.println("Press Ctrl-C to quit.");
+    }
+
+    /**
+     * Close the service.
      * <p>
      * Note that {@link WalletAppKit#setAutoStop(boolean)} is set by default and installs a shutdown handler
      * via {@link Runtime#addShutdownHook(Thread)} so we do not need to worry about explicitly shutting down
@@ -151,119 +116,71 @@ public class ForwardingService implements AutoCloseable {
      */
     @Override
     public void close() {
-        if (kit.isRunning()) {
-            kit.wallet().removeCoinsReceivedEventListener(listener);
+        if (kit != null) {
+            if (kit.isRunning()) {
+                kit.wallet().removeCoinsReceivedEventListener(coinsReceivedListener);
+            }
+            kit.close();
         }
-        kit.stopAsync();
     }
 
     /**
-     * Implement the {@link WalletCoinsReceivedEventListener} functional interface. We could have {@link ForwardingService}
-     * implement {@link WalletCoinsReceivedEventListener} with the {@code implements} keyword, but with JDK 8+ this method
-     * can be private with any name and be referenced with a method reference.
-     * @param wallet The active wallet (unused)
+     * A listener to receive coins and forward them to the configured address.
+     * Implements the {@link WalletCoinsReceivedEventListener} functional interface.
+     * @param wallet The active wallet
      * @param incomingTx the received transaction
      * @param prevBalance wallet balance before this transaction (unused)
      * @param newBalance wallet balance after this transaction (unused)
      */
-    private void coinsReceivedListener(Wallet wallet, Transaction incomingTx, Coin prevBalance, Coin newBalance) {
+    private void coinForwardingListener(Wallet wallet, Transaction incomingTx, Coin prevBalance, Coin newBalance) {
         // Incoming transaction received, now "compose" (i.e. chain) a call to wait for required confirmations
         // The transaction "incomingTx" can either be pending, or included into a block (we didn't see the broadcast).
-        Coin value = incomingTx.getValueSentToMe(kit.wallet());
+        Coin value = incomingTx.getValueSentToMe(wallet);
         System.out.printf("Received tx for %s : %s\n", value.toFriendlyString(), incomingTx);
         System.out.println("Transaction will be forwarded after it confirms.");
         System.out.println("Waiting for confirmation...");
-        waitForConfirmation(incomingTx)
+        wallet.waitForConfirmations(incomingTx, REQUIRED_CONFIRMATIONS)
             .thenCompose(confidence -> {
-                // Required confirmations received, now compose a call to broadcast the forwarding transaction
+                // Required confirmations received, now create and send forwarding transaction
                 System.out.printf("Incoming tx has received %d confirmations.\n", confidence.getDepthInBlocks());
-                // Now send the coins onwards by sending exactly the outputs that have been sent to us
-                SendRequest sendRequest = SendRequest.emptyWallet(forwardingAddress);
-                sendRequest.coinSelector = forwardingCoinSelector(incomingTx.getTxId());
-                System.out.printf("Creating outgoing transaction for %s...\n", forwardingAddress);
-                return sendTransaction(sendRequest);
+                return forward(wallet, incomingTx, forwardingAddress);
             })
-            .thenCompose(broadcast -> {
-                System.out.printf("Transaction %s is signed and is being delivered to %s...\n", broadcast.transaction().getTxId(), network);
-                return broadcast.future(); // Return a future that completes when Peers report they have seen the transaction
-            })
-            .thenAccept(tx ->
-                System.out.printf("Sent %s onwards and acknowledged by peers, via transaction %s\n", tx.getOutputSum().toFriendlyString(), tx.getTxId())
-            );
+            .whenComplete((broadcast, throwable) -> {
+                if (broadcast != null) {
+                    System.out.printf("Sent %s onwards and acknowledged by peers, via transaction %s\n",
+                            broadcast.transaction().getOutputSum().toFriendlyString(),
+                            broadcast.transaction().getTxId());
+                } else {
+                    System.out.println("Exception occurred: "  + throwable);
+                }
+            });
+
     }
 
     /**
-     * Wait for confirmation on a transaction.
-     * <p>
-     * TODO: Consider changing this so that the returned object contains a reference to the actual transaction rather than just its hash (id)
-     * <p>
-     * TODO: Consider adding this method (or equivalent) to the main bitcoinj API (Wallet or other class)
-     * @param tx the transaction we are waiting for
-     * @return a future for an object that contains transaction confidence information
+     * Forward an incoming transaction by creating a new transaction, signing, and sending to the specified address. The
+     * inputs for the new transaction should only come from the incoming transaction, so we use a custom {@link CoinSelector}
+     * that only selects wallet UTXOs with the correct parent transaction ID.
+     * @param wallet The active wallet
+     * @param incomingTx the received transaction
+     * @param forwardingAddress the address to send to
+     * @return A future for a TransactionBroadcast object that completes when relay is acknowledged by peers
      */
-    CompletableFuture<TransactionConfidence> waitForConfirmation(Transaction tx) {
-        return tx.getConfidence().getDepthFuture(REQUIRED_CONFIRMATIONS);
-    }
-
-    /**
-     * Initiate sending the transaction in a {@link SendRequest}. Calls {@link Wallet#sendCoins(SendRequest)} which
-     * performs the following significant operations internally:
-     * <ol>
-     *     <li>{@link Wallet#completeTx(SendRequest)} -- calculate change and sign</li>
-     *     <li>{@link Wallet#commitTx(Transaction)} -- puts the transaction in the {@code Wallet}'s pending pool</li>
-     *     <li>{@link org.bitcoinj.core.TransactionBroadcaster#broadcastTransaction(Transaction)} typically implemented by {@link org.bitcoinj.core.PeerGroup#broadcastTransaction(Transaction)} -- queues requests to send the transaction to a determined number of {@code Peer}s</li>
-     * </ol>
-     * Note that this method will <i>complete</i> and return a {@link TransactionBroadcast} <i>before</i> the broadcast actually occurs. The broadcast process includes the following steps:
-     * <ol>
-     *     <li>Wait until enough {@link org.bitcoinj.core.Peer}s are connected.</li>
-     *     <li>Broadcast the transaction by a determined number of {@link org.bitcoinj.core.Peer}s</li>
-     *     <li>Wait for confirmation from a determined number of remote peers that they have received the broadcast</li>
-     *     <li>Mark {@link TransactionBroadcast#future()} as complete</li>
-     * </ol>
-     * Note: There is a pending PR (#2548) which will make available an additional {@link CompletableFuture} that will complete
-     * after step 3 above. When and if that PR is merged, this method should probably return that future.
-     * <p>
-     * TODO: Check the status of PR #2548
-     * <p>
-     * TODO: Consider adding this method (or equivalent) to the Wallet class
-     * @param sendRequest transaction to send
-     * @return A future for the transaction broadcast
-     */
-    CompletableFuture<TransactionBroadcast> sendTransaction(SendRequest sendRequest) {
-        CompletableFuture<TransactionBroadcast> future = new CompletableFuture<>();
-        try {
-            // Complete successfully when the transaction is ready to be sent to peers.
-            future.complete(kit.wallet().sendCoins(sendRequest).broadcast);
-        } catch (KeyCrypterException | InsufficientMoneyException e) {
-            // We should never try to send more coins than we have, if we do we get an InsufficientMoneyException
-            // We don't use encrypted wallets in this example - KeyCrypterException can never happen.
-            future.completeExceptionally(e);
-        }
-        return future;
-    }
-
-    /**
-     * @return The current receiving address of the forwarding wallet
-     */
-    public Address receivingAddress() {
-        return kit.wallet().currentReceiveAddress();
+    private CompletableFuture<TransactionBroadcast> forward(Wallet wallet, Transaction incomingTx, Address forwardingAddress) {
+        // Send coins received in incomingTx onwards by sending exactly the UTXOs we have just received.
+        // We're not truly emptying the wallet because we're limiting the available outputs with a CoinSelector.
+        SendRequest sendRequest = SendRequest.emptyWallet(forwardingAddress);
+        // Use a CoinSelector that only returns wallet UTXOs from the incoming transaction.
+        sendRequest.coinSelector = CoinSelector.fromPredicate(output -> Objects.equals(output.getParentTransactionHash(), incomingTx.getTxId()));
+        System.out.printf("Creating outgoing transaction for %s...\n", forwardingAddress);
+        return wallet.sendTransaction(sendRequest)
+                .thenCompose(broadcast -> {
+                    System.out.printf("Transaction %s is signed and is being delivered to %s...\n", broadcast.transaction().getTxId(), network);
+                    return broadcast.awaitRelayed(); // Wait until peers report they have seen the transaction
+                });
     }
 
     static String getPrefix(BitcoinNetwork network) {
         return String.format("forwarding-service-%s", network.toString());
-    }
-
-    /**
-     * Create a CoinSelector that only returns outputs from a given parent transaction.
-     * <p>
-     * This is using the idea of partial function application to create a 2-argument function for coin selection
-     * with a third, fixed argument of the transaction id.
-     * @param forwardTxId The parent transaction hash
-     * @return a coin selector
-     */
-    static CoinSelector forwardingCoinSelector(Sha256Hash forwardTxId) {
-        return (target, candidates) -> candidates.stream()
-                .filter(output -> output.getParentTransactionHash().equals(forwardTxId))
-                .collect(collectingAndThen(toList(), CoinSelection::new));
     }
 }

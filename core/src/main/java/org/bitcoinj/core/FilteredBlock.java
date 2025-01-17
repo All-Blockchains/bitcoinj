@@ -18,9 +18,12 @@
 package org.bitcoinj.core;
 
 import org.bitcoinj.base.Sha256Hash;
+import org.bitcoinj.base.internal.Buffers;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedList;
@@ -34,7 +37,7 @@ import java.util.Objects;
  * 
  * <p>Instances of this class are not safe for use by multiple threads.</p>
  */
-public class FilteredBlock extends Message {
+public class FilteredBlock extends BaseMessage {
     private Block header;
 
     private PartialMerkleTree merkleTree;
@@ -43,13 +46,23 @@ public class FilteredBlock extends Message {
     // A set of transactions whose hashes are a subset of getTransactionHashes()
     // These were relayed as a part of the filteredblock getdata, ie likely weren't previously received as loose transactions
     private Map<Sha256Hash, Transaction> associatedTransactions = new HashMap<>();
-    
-    public FilteredBlock(NetworkParameters params, byte[] payloadBytes) throws ProtocolException {
-        super(params, payloadBytes, 0);
+
+    /**
+     * Deserialize this message from a given payload.
+     *
+     * @param payload payload to deserialize from
+     * @return read message
+     * @throws BufferUnderflowException if the read message extends beyond the remaining bytes of the payload
+     */
+    public static FilteredBlock read(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
+        byte[] headerBytes = Buffers.readBytes(payload, Block.HEADER_SIZE);
+        Block header = Block.read(ByteBuffer.wrap(headerBytes));
+        PartialMerkleTree merkleTree = PartialMerkleTree.read(payload);
+        return new FilteredBlock(header, merkleTree);
     }
 
-    public FilteredBlock(NetworkParameters params, Block header, PartialMerkleTree pmt) {
-        super(params);
+    public FilteredBlock(Block header, PartialMerkleTree pmt) {
+        super();
         this.header = header;
         this.merkleTree = pmt;
     }
@@ -60,20 +73,9 @@ public class FilteredBlock extends Message {
             header.bitcoinSerializeToStream(stream);
         else
             header.cloneAsHeader().bitcoinSerializeToStream(stream);
-        merkleTree.bitcoinSerializeToStream(stream);
+        stream.write(merkleTree.serialize());
     }
 
-    @Override
-    protected void parse() throws ProtocolException {
-        byte[] headerBytes = new byte[Block.HEADER_SIZE];
-        System.arraycopy(payload, 0, headerBytes, 0, Block.HEADER_SIZE);
-        header = params.getDefaultSerializer().makeBlock(headerBytes);
-        
-        merkleTree = new PartialMerkleTree(params, payload, Block.HEADER_SIZE);
-        
-        length = Block.HEADER_SIZE + merkleTree.getMessageSize();
-    }
-    
     /**
      * Gets a list of leaf hashes which are contained in the partial merkle tree in this filtered block
      *
@@ -98,7 +100,6 @@ public class FilteredBlock extends Message {
     }
     
     /** Gets the hash of the block represented in this Filtered Block */
-    @Override
     public Sha256Hash getHash() {
         return header.getHash();
     }

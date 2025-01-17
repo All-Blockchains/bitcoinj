@@ -18,13 +18,14 @@
 package org.bitcoinj.net;
 
 import com.google.common.base.Throwables;
-import org.bitcoinj.utils.ListenableCompletableFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
+import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Creates a simple connection to a server using a {@link StreamConnection} to process data.
@@ -42,10 +43,10 @@ public class NioClient implements MessageWriteTarget {
         private boolean closeOnOpen = false;
         private boolean closeCalled = false;
 
-        Handler(StreamConnection upstreamConnection, int connectTimeoutMillis) {
+        Handler(StreamConnection upstreamConnection, Duration connectTimeout) {
             this.upstreamConnection = upstreamConnection;
             this.timeoutTask = new SocketTimeoutTask(this::timeoutOccurred);
-            setSocketTimeout(connectTimeoutMillis);
+            setSocketTimeout(connectTimeout);
             setTimeoutEnabled(true);
         }
 
@@ -60,8 +61,8 @@ public class NioClient implements MessageWriteTarget {
         }
 
         @Override
-        public void setSocketTimeout(int timeoutMillis) {
-            timeoutTask.setSocketTimeout(timeoutMillis);
+        public void setSocketTimeout(Duration timeout) {
+            timeoutTask.setSocketTimeout(timeout);
         }
 
         @Override
@@ -106,15 +107,15 @@ public class NioClient implements MessageWriteTarget {
      * The given connection <b>MUST</b> be unique to this object. This does not block while waiting for the connection to
      * open, but will call either the {@link StreamConnection#connectionOpened()} or
      * {@link StreamConnection#connectionClosed()} callback on the created network event processing thread.</p>
-     *
-     * @param connectTimeoutMillis The connect timeout set on the connection (in milliseconds). 0 is interpreted as no
-     *                             timeout.
+     * @param serverAddress socket address of the server to connect to
+     * @param parser parses data from the server
+     * @param connectTimeout timeout for establishing a connection to the server, or ZERO for no timeout
      */
     public NioClient(final SocketAddress serverAddress, final StreamConnection parser,
-                     final int connectTimeoutMillis) throws IOException {
+                     final Duration connectTimeout) throws IOException {
         manager.startAsync();
         manager.awaitRunning();
-        handler = new Handler(parser, connectTimeoutMillis);
+        handler = new Handler(parser, connectTimeout);
         manager.openConnection(serverAddress, handler).whenComplete((result, t) -> {
             if (t != null) {
                 log.error("Connect to {} failed: {}", serverAddress, Throwables.getRootCause(t));
@@ -128,7 +129,7 @@ public class NioClient implements MessageWriteTarget {
     }
 
     @Override
-    public synchronized ListenableCompletableFuture<Void> writeBytes(byte[] message) throws IOException {
+    public synchronized CompletableFuture<Void> writeBytes(byte[] message) throws IOException {
         return handler.writeTarget.writeBytes(message);
     }
 }

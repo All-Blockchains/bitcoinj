@@ -18,7 +18,7 @@
 package org.bitcoinj.signers;
 
 import org.bitcoinj.base.Coin;
-import org.bitcoinj.core.ECKey;
+import org.bitcoinj.crypto.ECKey;
 import org.bitcoinj.core.Transaction;
 import org.bitcoinj.core.TransactionInput;
 import org.bitcoinj.core.TransactionOutput;
@@ -98,11 +98,11 @@ public class LocalTransactionSigner implements TransactionSigner {
             if (pubKey instanceof DeterministicKey)
                 propTx.keyPaths.put(scriptPubKey, (((DeterministicKey) pubKey).getPath()));
 
-            ECKey key;
             // locate private key in redeem data. For P2PKH and P2PK inputs RedeemData will always contain
             // only one key (with private bytes). For P2SH inputs RedeemData will contain multiple keys, one of which MAY
             // have private bytes
-            if ((key = redeemData.getFullKey()) == null) {
+            ECKey key = redeemData.getFullKey();
+            if (key == null) {
                 log.warn("No local key found for input {}", i);
                 continue;
             }
@@ -110,7 +110,7 @@ public class LocalTransactionSigner implements TransactionSigner {
             Script inputScript = txIn.getScriptSig();
             // script here would be either a standard CHECKSIG program for P2PKH or P2PK inputs or
             // a CHECKMULTISIG program for P2SH inputs
-            byte[] script = redeemData.redeemScript.getProgram();
+            byte[] script = redeemData.redeemScript.program();
             try {
                 if (ScriptPattern.isP2PK(scriptPubKey) || ScriptPattern.isP2PKH(scriptPubKey)
                         || ScriptPattern.isP2SH(scriptPubKey)) {

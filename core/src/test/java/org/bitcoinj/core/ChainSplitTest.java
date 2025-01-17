@@ -17,11 +17,14 @@
 
 package org.bitcoinj.core;
 
+import org.bitcoinj.base.Address;
 import org.bitcoinj.base.BitcoinNetwork;
 import org.bitcoinj.base.Coin;
 import org.bitcoinj.base.ScriptType;
 import org.bitcoinj.base.Sha256Hash;
+import org.bitcoinj.base.internal.TimeUtils;
 import org.bitcoinj.core.TransactionConfidence.ConfidenceType;
+import org.bitcoinj.crypto.ECKey;
 import org.bitcoinj.params.TestNet3Params;
 import org.bitcoinj.store.MemoryBlockStore;
 import org.bitcoinj.testing.FakeTxBuilder;
@@ -38,11 +41,12 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
 import java.net.InetAddress;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static org.bitcoinj.base.Coin.CENT;
 import static org.bitcoinj.base.Coin.COIN;
 import static org.bitcoinj.base.Coin.FIFTY_COINS;
@@ -65,13 +69,13 @@ public class ChainSplitTest {
     @Before
     public void setUp() throws Exception {
         BriefLogFormatter.init();
-        Utils.setMockClock(); // Use mock clock
+        TimeUtils.setMockClock(); // Use mock clock
         Context.propagate(new Context(100, Coin.ZERO, false, true));
-        MemoryBlockStore blockStore = new MemoryBlockStore(TESTNET);
-        wallet = Wallet.createDeterministic(TESTNET, ScriptType.P2PKH);
+        MemoryBlockStore blockStore = new MemoryBlockStore(TESTNET.getGenesisBlock());
+        wallet = Wallet.createDeterministic(BitcoinNetwork.TESTNET, ScriptType.P2PKH);
         ECKey key1 = wallet.freshReceiveKey();
         ECKey key2 = wallet.freshReceiveKey();
-        chain = new BlockChain(TESTNET, wallet, blockStore);
+        chain = new BlockChain(BitcoinNetwork.TESTNET, wallet, blockStore);
         coinsTo = key1.toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET);
         coinsTo2 = key2.toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET);
         someOtherGuy = new ECKey().toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET);
@@ -187,8 +191,8 @@ public class ChainSplitTest {
         wallet.commitTx(spend);
         // Waiting for confirmation ... make it eligible for selection.
         assertEquals(Coin.ZERO, wallet.getBalance());
-        spend.getConfidence().markBroadcastBy(new PeerAddress(TESTNET, InetAddress.getByAddress(new byte[]{1, 2, 3, 4})));
-        spend.getConfidence().markBroadcastBy(new PeerAddress(TESTNET, InetAddress.getByAddress(new byte[]{5,6,7,8})));
+        spend.getConfidence().markBroadcastBy(PeerAddress.simple(InetAddress.getByAddress(new byte[]{1, 2, 3, 4}), TESTNET.getPort()));
+        spend.getConfidence().markBroadcastBy(PeerAddress.simple(InetAddress.getByAddress(new byte[]{5,6,7,8}), TESTNET.getPort()));
         assertEquals(ConfidenceType.PENDING, spend.getConfidence().getConfidenceType());
         assertEquals(valueOf(40, 0), wallet.getBalance());
         Block b2 = b1.createNextBlock(someOtherGuy);
@@ -267,7 +271,7 @@ public class ChainSplitTest {
     }
 
     private Block roundtrip(Block b2) throws ProtocolException {
-        return TESTNET.getDefaultSerializer().makeBlock(b2.bitcoinSerialize());
+        return TESTNET.getDefaultSerializer().makeBlock(ByteBuffer.wrap(b2.serialize()));
     }
 
     @Test
@@ -331,11 +335,11 @@ public class ChainSplitTest {
         // Check what happens when a re-org happens and one of our unconfirmed transactions becomes invalidated by a
         // double spend on the new best chain.
         final Transaction[] eventDead = new Transaction[1];
-        final Transaction[] eventReplacement = new Transaction[1];
+        final Sha256Hash[] eventReplacement = new Sha256Hash[1];
         wallet.addTransactionConfidenceEventListener((wallet, tx) -> {
             if (tx.getConfidence().getConfidenceType() == ConfidenceType.DEAD) {
                 eventDead[0] = tx;
-                eventReplacement[0] = tx.getConfidence().getOverridingTransaction();
+                eventReplacement[0] = tx.getConfidence().getOverridingTxId();
             }
         });
 
@@ -343,9 +347,9 @@ public class ChainSplitTest {
         Block b1 = TESTNET.getGenesisBlock().createNextBlock(coinsTo);
         chain.add(b1);
 
-        Transaction t1 = checkNotNull(wallet.createSend(someOtherGuy, valueOf(10, 0)));
+        Transaction t1 = Objects.requireNonNull(wallet.createSend(someOtherGuy, valueOf(10, 0)));
         Address yetAnotherGuy = new ECKey().toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET);
-        Transaction t2 = checkNotNull(wallet.createSend(yetAnotherGuy, valueOf(20, 0)));
+        Transaction t2 = Objects.requireNonNull(wallet.createSend(yetAnotherGuy, valueOf(20, 0)));
         wallet.commitTx(t1);
         // t1 is still pending ...
         Block b2 = b1.createNextBlock(new ECKey().toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET));
@@ -367,7 +371,7 @@ public class ChainSplitTest {
         // genesis -> b1 -> b2 [t1 dead and exited the miners mempools]
         //              \-> b3 (t2) -> b4
         assertEquals(t1, eventDead[0]);
-        assertEquals(t2, eventReplacement[0]);
+        assertEquals(t2.getTxId(), eventReplacement[0]);
         assertEquals(valueOf(30, 0), wallet.getBalance());
 
         // ... and back to our own parallel universe.
@@ -380,8 +384,8 @@ public class ChainSplitTest {
         assertEquals(ZERO, wallet.getBalance());
         // t2 is pending - resurrected double spends take precedence over our dead transactions (which are in nobodies
         // mempool by this point).
-        t1 = checkNotNull(wallet.getTransaction(t1.getTxId()));
-        t2 = checkNotNull(wallet.getTransaction(t2.getTxId()));
+        t1 = Objects.requireNonNull(wallet.getTransaction(t1.getTxId()));
+        t2 = Objects.requireNonNull(wallet.getTransaction(t2.getTxId()));
         assertEquals(ConfidenceType.DEAD, t1.getConfidence().getConfidenceType());
         assertEquals(ConfidenceType.PENDING, t2.getConfidence().getConfidenceType());
     }
@@ -509,14 +513,14 @@ public class ChainSplitTest {
         // This covers issue 468.
 
         // Receive some money to the wallet.
-        Transaction t1 = FakeTxBuilder.createFakeTx(TESTNET, COIN, coinsTo);
+        Transaction t1 = FakeTxBuilder.createFakeTx(TESTNET.network(), COIN, coinsTo);
         final Block b1 = FakeTxBuilder.makeSolvedTestBlock(TESTNET.getGenesisBlock(), t1);
         chain.add(b1);
 
         // Send a couple of payments one after the other (so the second depends on the change output of the first).
-        Transaction t2 = checkNotNull(wallet.createSend(new ECKey().toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET), CENT, true));
+        Transaction t2 = Objects.requireNonNull(wallet.createSend(new ECKey().toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET), CENT, true));
         wallet.commitTx(t2);
-        Transaction t3 = checkNotNull(wallet.createSend(new ECKey().toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET), CENT, true));
+        Transaction t3 = Objects.requireNonNull(wallet.createSend(new ECKey().toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET), CENT, true));
         wallet.commitTx(t3);
         chain.add(FakeTxBuilder.makeSolvedTestBlock(b1, t2, t3));
 
@@ -567,10 +571,10 @@ public class ChainSplitTest {
         // Check the coinbase transaction is building and in the unspent pool only.
         final Transaction coinbase = txns.get(0);
         assertEquals(ConfidenceType.BUILDING, coinbase.getConfidence().getConfidenceType());
-        assertTrue(!wallet.poolContainsTxHash(WalletTransaction.Pool.PENDING, coinbase.getTxId()));
+        assertFalse(wallet.poolContainsTxHash(WalletTransaction.Pool.PENDING, coinbase.getTxId()));
         assertTrue(wallet.poolContainsTxHash(WalletTransaction.Pool.UNSPENT, coinbase.getTxId()));
-        assertTrue(!wallet.poolContainsTxHash(WalletTransaction.Pool.SPENT, coinbase.getTxId()));
-        assertTrue(!wallet.poolContainsTxHash(WalletTransaction.Pool.DEAD, coinbase.getTxId()));
+        assertFalse(wallet.poolContainsTxHash(WalletTransaction.Pool.SPENT, coinbase.getTxId()));
+        assertFalse(wallet.poolContainsTxHash(WalletTransaction.Pool.DEAD, coinbase.getTxId()));
 
         // Add blocks to b3 until we can spend the coinbase.
         Block firstTip = b3;
@@ -610,9 +614,9 @@ public class ChainSplitTest {
         // Transaction 1 (in block b2) is now on a side chain and should have confidence type of dead and be in
         // the dead pool only.
         assertEquals(TransactionConfidence.ConfidenceType.DEAD, coinbase.getConfidence().getConfidenceType());
-        assertTrue(!wallet.poolContainsTxHash(WalletTransaction.Pool.PENDING, coinbase.getTxId()));
-        assertTrue(!wallet.poolContainsTxHash(WalletTransaction.Pool.UNSPENT, coinbase.getTxId()));
-        assertTrue(!wallet.poolContainsTxHash(WalletTransaction.Pool.SPENT, coinbase.getTxId()));
+        assertFalse(wallet.poolContainsTxHash(WalletTransaction.Pool.PENDING, coinbase.getTxId()));
+        assertFalse(wallet.poolContainsTxHash(WalletTransaction.Pool.UNSPENT, coinbase.getTxId()));
+        assertFalse(wallet.poolContainsTxHash(WalletTransaction.Pool.SPENT, coinbase.getTxId()));
         assertTrue(wallet.poolContainsTxHash(WalletTransaction.Pool.DEAD, coinbase.getTxId()));
         assertTrue(fodderIsDead.get());
 
@@ -632,10 +636,10 @@ public class ChainSplitTest {
 
         // The coinbase transaction should now have confidence type of building once more and in the unspent pool only.
         assertEquals(TransactionConfidence.ConfidenceType.BUILDING, coinbase.getConfidence().getConfidenceType());
-        assertTrue(!wallet.poolContainsTxHash(WalletTransaction.Pool.PENDING, coinbase.getTxId()));
+        assertFalse(wallet.poolContainsTxHash(WalletTransaction.Pool.PENDING, coinbase.getTxId()));
         assertTrue(wallet.poolContainsTxHash(WalletTransaction.Pool.UNSPENT, coinbase.getTxId()));
-        assertTrue(!wallet.poolContainsTxHash(WalletTransaction.Pool.SPENT, coinbase.getTxId()));
-        assertTrue(!wallet.poolContainsTxHash(WalletTransaction.Pool.DEAD, coinbase.getTxId()));
+        assertFalse(wallet.poolContainsTxHash(WalletTransaction.Pool.SPENT, coinbase.getTxId()));
+        assertFalse(wallet.poolContainsTxHash(WalletTransaction.Pool.DEAD, coinbase.getTxId()));
         // However, fodder is still dead. Bitcoin Core doesn't keep killed transactions around in case they become
         // valid again later. They are just deleted from the mempool for good.
 
@@ -655,9 +659,9 @@ public class ChainSplitTest {
 
         // The coinbase transaction should now have the confidence type of dead and be in the dead pool only.
         assertEquals(TransactionConfidence.ConfidenceType.DEAD, coinbase.getConfidence().getConfidenceType());
-        assertTrue(!wallet.poolContainsTxHash(WalletTransaction.Pool.PENDING, coinbase.getTxId()));
-        assertTrue(!wallet.poolContainsTxHash(WalletTransaction.Pool.UNSPENT, coinbase.getTxId()));
-        assertTrue(!wallet.poolContainsTxHash(WalletTransaction.Pool.SPENT, coinbase.getTxId()));
+        assertFalse(wallet.poolContainsTxHash(WalletTransaction.Pool.PENDING, coinbase.getTxId()));
+        assertFalse(wallet.poolContainsTxHash(WalletTransaction.Pool.UNSPENT, coinbase.getTxId()));
+        assertFalse(wallet.poolContainsTxHash(WalletTransaction.Pool.SPENT, coinbase.getTxId()));
         assertTrue(wallet.poolContainsTxHash(WalletTransaction.Pool.DEAD, coinbase.getTxId()));
     }
 }

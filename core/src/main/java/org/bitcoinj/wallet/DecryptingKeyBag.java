@@ -17,14 +17,13 @@
 package org.bitcoinj.wallet;
 
 import org.bitcoinj.base.ScriptType;
-import org.bitcoinj.core.ECKey;
-import org.bouncycastle.crypto.params.KeyParameter;
+import org.bitcoinj.crypto.AesKey;
+import org.bitcoinj.crypto.ECKey;
 
 import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.List;
-
-import static com.google.common.base.Preconditions.checkNotNull;
+import java.util.Objects;
 
 /**
  * A DecryptingKeyBag filters a pre-existing key bag, decrypting keys as they are requested using the provided
@@ -33,10 +32,10 @@ import static com.google.common.base.Preconditions.checkNotNull;
  */
 public class DecryptingKeyBag implements KeyBag {
     protected final KeyBag target;
-    protected final KeyParameter aesKey;
+    protected final AesKey aesKey;
 
-    public DecryptingKeyBag(KeyBag target, @Nullable KeyParameter aesKey) {
-        this.target = checkNotNull(target);
+    public DecryptingKeyBag(KeyBag target, @Nullable AesKey aesKey) {
+        this.target = Objects.requireNonNull(target);
         this.aesKey = aesKey;
     }
 

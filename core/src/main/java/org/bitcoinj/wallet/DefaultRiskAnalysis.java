@@ -18,9 +18,9 @@
 package org.bitcoinj.wallet;
 
 import org.bitcoinj.base.BitcoinNetwork;
-import org.bitcoinj.core.ECKey;
-import org.bitcoinj.core.ECKey.ECDSASignature;
-import org.bitcoinj.core.SignatureDecodeException;
+import org.bitcoinj.crypto.ECKey;
+import org.bitcoinj.crypto.ECKey.ECDSASignature;
+import org.bitcoinj.crypto.SignatureDecodeException;
 import org.bitcoinj.core.Transaction;
 import org.bitcoinj.core.TransactionConfidence;
 import org.bitcoinj.core.TransactionInput;
@@ -31,9 +31,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * <p>The default risk analysis. Currently, it only is concerned with whether a tx/dependency is non-final or not, and
@@ -91,18 +93,22 @@ public class DefaultRiskAnalysis implements RiskAnalysis {
         if (wallet == null)
             return null;
 
+
         final int height = wallet.getLastBlockSeenHeight();
-        final long time = wallet.getLastBlockSeenTimeSecs();
+        final Optional<Instant> time = wallet.lastBlockSeenTime();
+        if (!time.isPresent())
+            return null;
+
         // If the transaction has a lock time specified in blocks, we consider that if the tx would become final in the
         // next block it is not risky (as it would confirm normally).
         final int adjustedHeight = height + 1;
 
-        if (!tx.isFinal(adjustedHeight, time)) {
+        if (!tx.isFinal(adjustedHeight, time.get())) {
             nonFinal = tx;
             return Result.NON_FINAL;
         }
         for (Transaction dep : dependencies) {
-            if (!dep.isFinal(adjustedHeight, time)) {
+            if (!dep.isFinal(adjustedHeight, time.get())) {
                 nonFinal = dep;
                 return Result.NON_FINAL;
             }
@@ -166,7 +172,7 @@ public class DefaultRiskAnalysis implements RiskAnalysis {
     public static RuleViolation isOutputStandard(TransactionOutput output) {
         if (output.isDust())
             return RuleViolation.DUST;
-        for (ScriptChunk chunk : output.getScriptPubKey().getChunks()) {
+        for (ScriptChunk chunk : output.getScriptPubKey().chunks()) {
             if (chunk.isPushData() && !chunk.isShortestPossiblePushData())
                 return RuleViolation.SHORTEST_POSSIBLE_PUSHDATA;
         }
@@ -175,7 +181,7 @@ public class DefaultRiskAnalysis implements RiskAnalysis {
 
     /** Checks if the given input passes some of the AreInputsStandard checks. Not complete. */
     public static RuleViolation isInputStandard(TransactionInput input) {
-        for (ScriptChunk chunk : input.getScriptSig().getChunks()) {
+        for (ScriptChunk chunk : input.getScriptSig().chunks()) {
             if (chunk.data != null && !chunk.isShortestPossiblePushData())
                 return RuleViolation.SHORTEST_POSSIBLE_PUSHDATA;
             if (chunk.isPushData()) {

@@ -18,8 +18,8 @@
 package org.bitcoinj.crypto;
 
 import org.bitcoinj.base.Base58;
-import org.bitcoinj.core.NetworkParameters;
-import org.bitcoinj.params.MainNetParams;
+import static org.bitcoinj.base.BitcoinNetwork.MAINNET;
+
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,7 +28,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
-import static org.bitcoinj.base.utils.ByteUtils.HEX;
+import org.bitcoinj.base.internal.ByteUtils;
 import static org.junit.Assert.assertEquals;
 
 /**
@@ -36,7 +36,6 @@ import static org.junit.Assert.assertEquals;
  */
 public class BIP32Test {
     private static final Logger log = LoggerFactory.getLogger(BIP32Test.class);
-    private static final NetworkParameters MAINNET = MainNetParams.get();
 
     HDWTestVector[] tvs = {
             new HDWTestVector(
@@ -170,7 +169,7 @@ public class BIP32Test {
     private void testVector(int testCase) {
         log.info("=======  Test vector {}", testCase);
         HDWTestVector tv = tvs[testCase];
-        DeterministicKey masterPrivateKey = HDKeyDerivation.createMasterPrivateKey(HEX.decode(tv.seed));
+        DeterministicKey masterPrivateKey = HDKeyDerivation.createMasterPrivateKey(ByteUtils.parseHex(tv.seed));
         assertEquals(testEncode(tv.priv), testEncode(masterPrivateKey.serializePrivB58(MAINNET)));
         assertEquals(testEncode(tv.pub), testEncode(masterPrivateKey.serializePubB58(MAINNET)));
         DeterministicHierarchy dh = new DeterministicHierarchy(masterPrivateKey);
@@ -186,7 +185,7 @@ public class BIP32Test {
     }
 
     private String testEncode(String what) {
-        return HEX.encode(Base58.decodeChecked(what));
+        return ByteUtils.formatHex(Base58.decodeChecked(what));
     }
 
     static class HDWTestVector {

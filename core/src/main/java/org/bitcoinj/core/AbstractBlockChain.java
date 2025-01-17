@@ -17,7 +17,8 @@
 
 package org.bitcoinj.core;
 
-import com.google.common.base.Preconditions;
+import com.google.common.annotations.VisibleForTesting;
+import org.bitcoinj.base.Network;
 import org.bitcoinj.base.Sha256Hash;
 import org.bitcoinj.core.listeners.NewBestBlockListener;
 import org.bitcoinj.core.listeners.ReorganizeListener;
@@ -26,7 +27,6 @@ import org.bitcoinj.script.ScriptException;
 import org.bitcoinj.store.BlockStore;
 import org.bitcoinj.store.BlockStoreException;
 import org.bitcoinj.store.SPVBlockStore;
-import org.bitcoinj.utils.ListenableCompletableFuture;
 import org.bitcoinj.utils.ListenerRegistration;
 import org.bitcoinj.utils.Threading;
 import org.bitcoinj.utils.VersionTally;
@@ -35,9 +35,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+import java.math.BigInteger;
+import java.nio.ByteBuffer;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Date;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -45,14 +48,15 @@ import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReentrantLock;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkArgument;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * <p>An AbstractBlockChain holds a series of {@link Block} objects, links them together, and knows how to verify that
@@ -135,14 +139,14 @@ public abstract class AbstractBlockChain {
         final Map<Sha256Hash, Transaction> filteredTxn;
         OrphanBlock(Block block, @Nullable List<Sha256Hash> filteredTxHashes, @Nullable Map<Sha256Hash, Transaction> filteredTxn) {
             final boolean filtered = filteredTxHashes != null && filteredTxn != null;
-            Preconditions.checkArgument((block.getTransactions() == null && filtered)
+            checkArgument((block.getTransactions() == null && filtered)
                                         || (block.getTransactions() != null && !filtered));
             this.block = block;
             this.filteredTxHashes = filteredTxHashes;
             this.filteredTxn = filteredTxn;
         }
     }
-    // Holds blocks that we have received but can't plug into the chain yet, eg because they were created whilst we
+    // Holds blocks that we have received but can't plug into the chain yet, e.g. because they were created whilst we
     // were downloading the block chain.
     private final LinkedHashMap<Sha256Hash, OrphanBlock> orphanBlocks = new LinkedHashMap<>();
 
@@ -159,11 +163,24 @@ public abstract class AbstractBlockChain {
 
     /**
      * Constructs a BlockChain connected to the given list of listeners (wallets) and a store.
+     * @param network network for this chain
+     * @param wallets list of listeners (wallets)
+     * @param blockStore where to store blocks
+     * @throws BlockStoreException if a failure occurs while storing a block
+     */
+    public AbstractBlockChain(Network network, List<? extends Wallet> wallets,
+                              BlockStore blockStore) throws BlockStoreException {
+        this( NetworkParameters.of(network), wallets, blockStore);
+    }
+
+    /**
+     * Constructs a BlockChain connected to the given list of listeners (wallets) and a store.
      * @param params network parameters for this chain
      * @param wallets list of listeners (wallets)
      * @param blockStore where to store blocks
      * @throws BlockStoreException if a failure occurs while storing a block
      */
+    @VisibleForTesting
     public AbstractBlockChain(NetworkParameters params, List<? extends Wallet> wallets,
                               BlockStore blockStore) throws BlockStoreException {
         this.blockStore = blockStore;
@@ -476,6 +493,10 @@ public abstract class AbstractBlockChain {
                 return false;
             }
 
+            BigInteger target = block.getDifficultyTargetAsInteger();
+            if (target.signum() <= 0 || target.compareTo(params.maxTarget) > 0)
+                throw new VerificationException("Difficulty target is out of range: " + target.toString());
+
             // If we want to verify transactions (ie we are running with full blocks), verify that block has transactions
             if (shouldVerifyTransactions() && block.getTransactions() == null)
                 throw new VerificationException("Got a block header while running in full-block mode");
@@ -495,7 +516,7 @@ public abstract class AbstractBlockChain {
             // are only lightly verified: presence in a valid connecting block is taken as proof of validity. See the
             // article here for more details: https://bitcoinj.github.io/security-model
             try {
-                block.verifyHeader();
+                Block.verifyHeader(block);
                 storedPrev = getStoredBlockInCurrentScope(block.getPrevBlockHash());
                 if (storedPrev != null) {
                     height = storedPrev.getHeight() + 1;
@@ -504,7 +525,7 @@ public abstract class AbstractBlockChain {
                 }
                 flags = params.getBlockVerificationFlags(block, versionTally, height);
                 if (shouldVerifyTransactions())
-                    block.verifyTransactions(height, flags);
+                    Block.verifyTransactions(params, block, height, flags);
             } catch (VerificationException e) {
                 log.error("Failed to verify block: ", e);
                 log.error(block.getHashAsString());
@@ -517,7 +538,8 @@ public abstract class AbstractBlockChain {
                 // We can't find the previous block. Probably we are still in the process of downloading the chain and a
                 // block was solved whilst we were doing it. We put it to one side and try to connect it later when we
                 // have more blocks.
-                checkState(tryConnecting, "bug in tryConnectingOrphans");
+                checkState(tryConnecting, () ->
+                        "bug in tryConnectingOrphans");
                 log.warn("Block does not connect: {} prev {}", block.getHashAsString(), block.getPrevBlockHash());
                 orphanBlocks.put(block.getHash(), new OrphanBlock(block, filteredTxHashList, filteredTxn));
                 if (tryConnecting)
@@ -555,7 +577,7 @@ public abstract class AbstractBlockChain {
     }
 
     // expensiveChecks enables checks that require looking at blocks further back in the chain
-    // than the previous one when connecting (eg median timestamp check)
+    // than the previous one when connecting (e.g. median timestamp check)
     // It could be exposed, but for now we just set it to shouldVerifyTransactions()
     private void connectBlock(final Block block, StoredBlock storedPrev, boolean expensiveChecks,
                               @Nullable final List<Sha256Hash> filteredTxHashList,
@@ -567,7 +589,7 @@ public abstract class AbstractBlockChain {
             throw new VerificationException("Block failed checkpoint lockin at " + (storedPrev.getHeight() + 1));
         if (shouldVerifyTransactions()) {
             for (Transaction tx : block.getTransactions())
-                if (!tx.isFinal(storedPrev.getHeight() + 1, block.getTimeSeconds()))
+                if (!tx.isFinal(storedPrev.getHeight() + 1, block.time()))
                    throw new VerificationException("Block contains non-final transaction");
         }
         
@@ -578,7 +600,7 @@ public abstract class AbstractBlockChain {
                         block.getHashAsString(), filteredTxHashList.size(), filteredTxn.size());
                 for (Sha256Hash hash : filteredTxHashList) log.debug("  matched tx {}", hash);
             }
-            if (expensiveChecks && block.getTimeSeconds() <= getMedianTimestampOfRecentBlocks(head, blockStore))
+            if (expensiveChecks && !block.time().isAfter(getMedianTimestampOfRecentBlocks(head, blockStore)))
                 throw new VerificationException("Block's timestamp is too early");
 
             // BIP 66 & 65: Enforce block version 3/4 once they are a supermajority of blocks
@@ -725,7 +747,7 @@ public abstract class AbstractBlockChain {
             sendTransactionsToListener(newStoredBlock, newBlockType, listener, 0, block.getTransactions(),
                     !first, falsePositives);
         } else if (filteredTxHashList != null) {
-            checkNotNull(filteredTxn);
+            Objects.requireNonNull(filteredTxn);
             // We must send transactions to listeners in the order they appeared in the block - thus we iterate over the
             // set of hashes and call sendTransactionsToListener with individual txn when they have not already been
             // seen in loose broadcasts - otherwise notifyTransactionIsInBlock on the hash.
@@ -748,13 +770,13 @@ public abstract class AbstractBlockChain {
     /**
      * Gets the median timestamp of the last 11 blocks
      */
-    private static long getMedianTimestampOfRecentBlocks(StoredBlock storedBlock,
+    private static Instant getMedianTimestampOfRecentBlocks(StoredBlock storedBlock,
                                                          BlockStore store) throws BlockStoreException {
-        long[] timestamps = new long[11];
+        Instant[] timestamps = new Instant[11];
         int unused = 9;
-        timestamps[10] = storedBlock.getHeader().getTimeSeconds();
+        timestamps[10] = storedBlock.getHeader().time();
         while (unused >= 0 && (storedBlock = storedBlock.getPrev(store)) != null)
-            timestamps[unused--] = storedBlock.getHeader().getTimeSeconds();
+            timestamps[unused--] = storedBlock.getHeader().time();
         
         Arrays.sort(timestamps, unused+1, 11);
         return timestamps[unused + (11-unused)/2];
@@ -810,7 +832,7 @@ public abstract class AbstractBlockChain {
             for (Iterator<StoredBlock> it = newBlocks.descendingIterator(); it.hasNext();) {
                 cursor = it.next();
                 Block cursorBlock = cursor.getHeader();
-                if (expensiveChecks && cursorBlock.getTimeSeconds() <= getMedianTimestampOfRecentBlocks(cursor.getPrev(blockStore), blockStore))
+                if (expensiveChecks && !cursorBlock.time().isAfter(getMedianTimestampOfRecentBlocks(cursor.getPrev(blockStore), blockStore)))
                     throw new VerificationException("Block's timestamp is too early during reorg");
                 TransactionOutputChanges txOutChanges;
                 if (cursor != newChainHead || block == null)
@@ -849,12 +871,13 @@ public abstract class AbstractBlockChain {
      * Returns the set of contiguous blocks between 'higher' and 'lower'. Higher is included, lower is not.
      */
     private static LinkedList<StoredBlock> getPartialChain(StoredBlock higher, StoredBlock lower, BlockStore store) throws BlockStoreException {
-        checkArgument(higher.getHeight() > lower.getHeight(), "higher and lower are reversed");
+        checkArgument(higher.getHeight() > lower.getHeight(), () ->
+                "higher and lower are reversed");
         LinkedList<StoredBlock> results = new LinkedList<>();
         StoredBlock cursor = higher;
         do {
             results.add(cursor);
-            cursor = checkNotNull(cursor.getPrev(store), "Ran off the end of the chain");
+            cursor = Objects.requireNonNull(cursor.getPrev(store), "Ran off the end of the chain");
         } while (!cursor.equals(lower));
         return results;
     }
@@ -877,10 +900,10 @@ public abstract class AbstractBlockChain {
         while (!currentChainCursor.equals(newChainCursor)) {
             if (currentChainCursor.getHeight() > newChainCursor.getHeight()) {
                 currentChainCursor = currentChainCursor.getPrev(store);
-                checkNotNull(currentChainCursor, "Attempt to follow an orphan chain");
+                Objects.requireNonNull(currentChainCursor, "Attempt to follow an orphan chain");
             } else {
                 newChainCursor = newChainCursor.getPrev(store);
-                checkNotNull(newChainCursor, "Attempt to follow an orphan chain");
+                Objects.requireNonNull(newChainCursor, "Attempt to follow an orphan chain");
             }
         }
         return currentChainCursor;
@@ -913,7 +936,7 @@ public abstract class AbstractBlockChain {
             try {
                 falsePositives.remove(tx.getTxId());
                 if (clone)
-                    tx = tx.params.getDefaultSerializer().makeTransaction(tx.bitcoinSerialize());
+                    tx = Transaction.read(ByteBuffer.wrap(tx.serialize()));
                 listener.receiveFromBlock(tx, block, blockType, relativityOffset++);
             } catch (ScriptException e) {
                 // We don't want scripts we don't understand to break the block chain so just note that this tx was
@@ -1028,18 +1051,17 @@ public abstract class AbstractBlockChain {
 
     /**
      * Returns an estimate of when the given block will be reached, assuming a perfect 10 minute average for each
-     * block. This is useful for turning transaction lock times into human readable times. Note that a height in
+     * block. This is useful for turning transaction lock times into human-readable times. Note that a height in
      * the past will still be estimated, even though the time of solving is actually known (we won't scan backwards
      * through the chain to obtain the right answer).
      * @param height block time to estimate
-     * @return estimated date block will be mined
+     * @return estimated time block will be mined
      */
-    public Date estimateBlockTime(int height) {
+    public Instant estimateBlockTimeInstant(int height) {
         synchronized (chainHeadLock) {
             long offset = height - chainHead.getHeight();
-            long headTime = chainHead.getHeader().getTimeSeconds();
-            long estimated = (headTime * 1000) + (1000L * 60L * 10L * offset);
-            return new Date(estimated);
+            Instant headTime = chainHead.getHeader().time();
+            return headTime.plus(10 * offset, ChronoUnit.MINUTES);
         }
     }
 
@@ -1049,8 +1071,8 @@ public abstract class AbstractBlockChain {
      * @param height desired height
      * @return future that will complete when height is reached
      */
-    public ListenableCompletableFuture<StoredBlock> getHeightFuture(final int height) {
-        final ListenableCompletableFuture<StoredBlock> result = new ListenableCompletableFuture<>();
+    public CompletableFuture<StoredBlock> getHeightFuture(final int height) {
+        final CompletableFuture<StoredBlock> result = new CompletableFuture<>();
         addNewBestBlockListener(Threading.SAME_THREAD, new NewBestBlockListener() {
             @Override
             public void notifyNewBestBlock(StoredBlock block) throws VerificationException {

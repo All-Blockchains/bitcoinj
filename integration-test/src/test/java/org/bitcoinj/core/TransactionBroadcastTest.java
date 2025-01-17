@@ -17,9 +17,11 @@
 
 package org.bitcoinj.core;
 
-import com.google.common.util.concurrent.AtomicDouble;
+import org.bitcoinj.base.Address;
 import org.bitcoinj.base.BitcoinNetwork;
 import org.bitcoinj.base.ScriptType;
+import org.bitcoinj.base.internal.TimeUtils;
+import org.bitcoinj.crypto.ECKey;
 import org.bitcoinj.testing.FakeTxBuilder;
 import org.bitcoinj.testing.InboundMessageQueuer;
 import org.bitcoinj.testing.TestWithPeerGroup;
@@ -34,11 +36,13 @@ import org.junit.runners.Parameterized;
 
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Objects;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicLong;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.lang.Double.longBitsToDouble;
 import static org.bitcoinj.base.Coin.CENT;
 import static org.bitcoinj.base.Coin.COIN;
 import static org.bitcoinj.base.Coin.FIFTY_COINS;
@@ -65,7 +69,7 @@ public class TransactionBroadcastTest extends TestWithPeerGroup {
     @Override
     @Before
     public void setUp() throws Exception {
-        Utils.setMockClock(); // Use mock clock
+        TimeUtils.setMockClock(); // Use mock clock
         super.setUp();
         // Fix the random permutation that TransactionBroadcast uses to shuffle the peers.
         TransactionBroadcast.random = new Random(0);
@@ -77,19 +81,20 @@ public class TransactionBroadcastTest extends TestWithPeerGroup {
     @After
     public void tearDown() {
         super.tearDown();
+        TimeUtils.clearMockClock();
     }
 
     @Test
     public void fourPeers() throws Exception {
         InboundMessageQueuer[] channels = { connectPeer(1), connectPeer(2), connectPeer(3), connectPeer(4) };
-        Transaction tx = FakeTxBuilder.createFakeTx(TESTNET);
+        Transaction tx = FakeTxBuilder.createFakeTx(TESTNET.network());
         tx.getConfidence().setSource(TransactionConfidence.Source.SELF);
         TransactionBroadcast broadcast = new TransactionBroadcast(peerGroup, tx);
-        final AtomicDouble lastProgress = new AtomicDouble();
-        broadcast.setProgressCallback(lastProgress::set);
+        final AtomicLong lastProgress = new AtomicLong();
+        broadcast.setProgressCallback(atomicCallback(lastProgress));
         CompletableFuture<TransactionBroadcast> future = broadcast.broadcastAndAwaitRelay();
         assertFalse(future.isDone());
-        assertEquals(0.0, lastProgress.get(), 0.0);
+        assertEquals(0.0, longBitsToDouble(lastProgress.get()), 0.0);
         // We expect two peers to receive a tx message, and at least one of the others must announce for the future to
         // complete successfully.
         Message[] messages = {
@@ -105,11 +110,11 @@ public class TransactionBroadcastTest extends TestWithPeerGroup {
         assertNull(messages[2]);
         Threading.waitForUserCode();
         assertFalse(future.isDone());
-        assertEquals(0.0, lastProgress.get(), 0.0);
-        inbound(channels[1], InventoryMessage.with(tx));
+        assertEquals(0.0, longBitsToDouble(lastProgress.get()), 0.0);
+        inbound(channels[1], InventoryMessage.ofTransactions(tx));
         future.get();
         Threading.waitForUserCode();
-        assertEquals(1.0, lastProgress.get(), 0.0);
+        assertEquals(1.0, longBitsToDouble(lastProgress.get()), 0.0);
         // There is no response from the Peer as it has nothing to do.
         assertNull(outbound(channels[1]));
     }
@@ -120,27 +125,27 @@ public class TransactionBroadcastTest extends TestWithPeerGroup {
         // immediately with the latest state. This avoids API users writing accidentally racy code when they use
         // a convenience method like peerGroup.broadcastTransaction.
         InboundMessageQueuer[] channels = { connectPeer(1), connectPeer(2), connectPeer(3), connectPeer(4) };
-        Transaction tx = FakeTxBuilder.createFakeTx(TESTNET, CENT, address);
+        Transaction tx = FakeTxBuilder.createFakeTx(TESTNET.network(), CENT, address);
         tx.getConfidence().setSource(TransactionConfidence.Source.SELF);
         TransactionBroadcast broadcast = peerGroup.broadcastTransaction(tx);
-        inbound(channels[1], InventoryMessage.with(tx));
+        inbound(channels[1], InventoryMessage.ofTransactions(tx));
         pingAndWait(channels[1]);
-        final AtomicDouble p = new AtomicDouble();
-        broadcast.setProgressCallback(p::set, Threading.SAME_THREAD);
+        final AtomicLong p = new AtomicLong();
+        broadcast.setProgressCallback(atomicCallback(p), Threading.SAME_THREAD);
         assertEquals(1.0, p.get(), 0.01);
     }
 
     @Test
     public void rejectHandling() throws Exception {
         InboundMessageQueuer[] channels = { connectPeer(0), connectPeer(1), connectPeer(2), connectPeer(3), connectPeer(4) };
-        Transaction tx = FakeTxBuilder.createFakeTx(TESTNET);
+        Transaction tx = FakeTxBuilder.createFakeTx(TESTNET.network());
         TransactionBroadcast broadcast = new TransactionBroadcast(peerGroup, tx);
         CompletableFuture<TransactionBroadcast> future = broadcast.broadcastAndAwaitRelay();
         // 0 and 3 are randomly selected to receive the broadcast.
         assertEquals(tx, outbound(channels[1]));
         assertEquals(tx, outbound(channels[2]));
         assertEquals(tx, outbound(channels[4]));
-        RejectMessage reject = new RejectMessage(TESTNET, RejectMessage.RejectCode.DUST, tx.getTxId(), "tx", "dust");
+        RejectMessage reject = new RejectMessage(RejectMessage.RejectCode.DUST, tx.getTxId(), "tx", "dust");
         inbound(channels[1], reject);
         inbound(channels[4], reject);
         try {
@@ -167,14 +172,14 @@ public class TransactionBroadcastTest extends TestWithPeerGroup {
         // Now create a spend, and expect the announcement on p1.
         Address dest = new ECKey().toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET);
         Wallet.SendResult sendResult = wallet.sendCoins(peerGroup, dest, COIN);
-        assertFalse(sendResult.broadcastComplete.isDone());
+        assertFalse(sendResult.awaitRelayed().isDone());
         Transaction t1;
         {
             Message m;
             while (!((m = outbound(p1)) instanceof Transaction));
             t1 = (Transaction) m;
         }
-        assertFalse(sendResult.broadcastComplete.isDone());
+        assertFalse(sendResult.awaitRelayed().isDone());
 
         // p1 eats it :( A bit later the PeerGroup is taken down.
         peerGroup.removeWallet(wallet);
@@ -193,7 +198,7 @@ public class TransactionBroadcastTest extends TestWithPeerGroup {
 
         // Set up connections and block chain.
         VersionMessage ver = new VersionMessage(TESTNET, 2);
-        ver.localServices = VersionMessage.NODE_NETWORK;
+        ver.localServices = Services.of(Services.NODE_NETWORK);
         InboundMessageQueuer p1 = connectPeer(1, ver);
         InboundMessageQueuer p2 = connectPeer(2);
 
@@ -211,10 +216,10 @@ public class TransactionBroadcastTest extends TestWithPeerGroup {
         // Now create a spend, and expect the announcement on p1.
         Address dest = new ECKey().toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET);
         Wallet.SendResult sendResult = wallet.sendCoins(peerGroup, dest, COIN);
-        assertNotNull(sendResult.tx);
+        assertNotNull(sendResult.transaction());
         Threading.waitForUserCode();
-        assertFalse(sendResult.broadcastComplete.isDone());
-        assertEquals(transactions[0], sendResult.tx);
+        assertFalse(sendResult.awaitRelayed().isDone());
+        assertEquals(transactions[0], sendResult.transaction());
         assertEquals(0, transactions[0].getConfidence().numBroadcastPeers());
         transactions[0] = null;
         Transaction t1;
@@ -230,13 +235,12 @@ public class TransactionBroadcastTest extends TestWithPeerGroup {
         // 49 BTC in change.
         assertEquals(valueOf(49, 0), t1.getValueSentToMe(wallet));
         // The future won't complete until it's heard back from the network on p2.
-        InventoryMessage inv = new InventoryMessage(TESTNET);
-        inv.addTransaction(t1);
+        InventoryMessage inv = InventoryMessage.ofTransactions(t1);
         inbound(p2, inv);
         pingAndWait(p2);
         Threading.waitForUserCode();
-        assertTrue(sendResult.broadcastComplete.isDone());
-        assertEquals(transactions[0], sendResult.tx);
+        assertTrue(sendResult.awaitRelayed().isDone());
+        assertEquals(transactions[0], sendResult.transaction());
         assertEquals(1, transactions[0].getConfidence().numBroadcastPeers());
         // Confirm it.
         Block b2 = FakeTxBuilder.createFakeBlock(blockStore, Block.BLOCK_HEIGHT_GENESIS, t1).block;
@@ -247,11 +251,16 @@ public class TransactionBroadcastTest extends TestWithPeerGroup {
         // Do the same thing with an offline transaction.
         peerGroup.removeWallet(wallet);
         SendRequest req = SendRequest.to(dest, valueOf(2, 0));
-        Transaction t3 = checkNotNull(wallet.sendCoinsOffline(req));
+        Transaction t3 = Objects.requireNonNull(wallet.sendCoinsOffline(req));
         assertNull(outbound(p1));  // Nothing sent.
         // Add the wallet to the peer group (simulate initialization). Transactions should be announced.
         peerGroup.addWallet(wallet);
         // Transaction announced to the first peer. No extra Bloom filter because no change address was needed.
-        assertEquals(t3.getTxId(), outbound(p1).getHash());
+        assertEquals(t3.getTxId(), ((Transaction) outbound(p1)).getTxId());
+    }
+
+    // Adapt an AtomicLong to be a TransactionBroadcast.ProgressCallback for use in tests
+    private TransactionBroadcast.ProgressCallback atomicCallback(AtomicLong atomicLong) {
+        return (double d) -> atomicLong.set(Double.doubleToRawLongBits(d));
     }
 }

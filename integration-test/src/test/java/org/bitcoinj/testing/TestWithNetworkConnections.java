@@ -17,17 +17,17 @@
 
 package org.bitcoinj.testing;
 
-import org.bitcoinj.base.ScriptType;
-import org.bitcoinj.core.Address;
-import org.bitcoinj.core.BlockChain;
+import org.bitcoinj.base.Address;
 import org.bitcoinj.base.Coin;
+import org.bitcoinj.base.ScriptType;
+import org.bitcoinj.core.BlockChain;
 import org.bitcoinj.core.Context;
-import org.bitcoinj.core.ECKey;
 import org.bitcoinj.core.Message;
 import org.bitcoinj.core.NetworkParameters;
 import org.bitcoinj.core.Peer;
 import org.bitcoinj.core.Ping;
 import org.bitcoinj.core.Pong;
+import org.bitcoinj.core.Services;
 import org.bitcoinj.core.VersionAck;
 import org.bitcoinj.core.VersionMessage;
 import org.bitcoinj.core.listeners.PreMessageReceivedEventListener;
@@ -54,29 +54,32 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.time.Duration;
+import java.util.Random;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkArgument;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * Utility class that makes it easy to work with mock NetworkConnections.
  */
 public class TestWithNetworkConnections {
+    protected static final int TCP_PORT_BASE = 10000 + new Random().nextInt(40000);
     public static final int PEER_SERVERS = 5;
+
     protected static final NetworkParameters UNITTEST = UnitTestParams.get();
     protected static final NetworkParameters TESTNET = TestNet3Params.get();
     protected BlockStore blockStore;
     protected BlockChain blockChain;
     protected Wallet wallet;
-    protected ECKey key;
     protected Address address;
     protected SocketAddress socketAddress;
 
-    private NioServer[] peerServers = new NioServer[PEER_SERVERS];
+    private final NioServer[] peerServers = new NioServer[PEER_SERVERS];
     private final ClientConnectionManager channels;
     protected final BlockingQueue<InboundMessageQueuer> newPeerWriteTargetQueue = new LinkedBlockingQueue<>();
 
@@ -98,7 +101,7 @@ public class TestWithNetworkConnections {
     }
 
     public void setUp() throws Exception {
-        setUp(new MemoryBlockStore(UNITTEST));
+        setUp(new MemoryBlockStore(UNITTEST.getGenesisBlock()));
     }
     
     public void setUp(BlockStore blockStore) throws Exception {
@@ -108,11 +111,10 @@ public class TestWithNetworkConnections {
         // Allow subclasses to override the wallet object with their own.
         if (wallet == null) {
             // Reduce the number of keys we need to work with to speed up these tests.
-            KeyChainGroup kcg = KeyChainGroup.builder(UNITTEST).lookaheadSize(4).lookaheadThreshold(2)
+            KeyChainGroup kcg = KeyChainGroup.builder(UNITTEST.network()).lookaheadSize(4).lookaheadThreshold(2)
                     .fromRandom(ScriptType.P2PKH).build();
-            wallet = new Wallet(UNITTEST, kcg);
-            key = wallet.freshReceiveKey();
-            address = key.toAddress(ScriptType.P2PKH, UNITTEST.network());
+            wallet = new Wallet(UNITTEST.network(), kcg);
+            address = wallet.freshReceiveAddress(ScriptType.P2PKH);
         }
         blockChain = new BlockChain(UNITTEST, wallet, blockStore);
 
@@ -147,7 +149,7 @@ public class TestWithNetworkConnections {
                     }
                 };
             }
-        }, new InetSocketAddress(InetAddress.getLoopbackAddress(), 2000 + i));
+        }, new InetSocketAddress(InetAddress.getLoopbackAddress(), TCP_PORT_BASE + i));
         peerServers[i].startAsync();
         peerServers[i].awaitRunning();
     }
@@ -167,7 +169,7 @@ public class TestWithNetworkConnections {
     }
 
     protected InboundMessageQueuer connect(Peer peer, VersionMessage versionMessage) throws Exception {
-        checkArgument(versionMessage.hasBlockChain());
+        checkArgument(versionMessage.services().has(Services.NODE_NETWORK));
         final AtomicBoolean doneConnecting = new AtomicBoolean(false);
         final Thread thisThread = Thread.currentThread();
         peer.addDisconnectedEventListener((p, peerCount) -> {
@@ -179,9 +181,9 @@ public class TestWithNetworkConnections {
         if (clientType == ClientType.NIO_CLIENT_MANAGER || clientType == ClientType.BLOCKING_CLIENT_MANAGER)
             channels.openConnection(new InetSocketAddress(InetAddress.getLoopbackAddress(), 2000), peer);
         else if (clientType == ClientType.NIO_CLIENT)
-            new NioClient(new InetSocketAddress(InetAddress.getLoopbackAddress(), 2000), peer, 100);
+            new NioClient(new InetSocketAddress(InetAddress.getLoopbackAddress(), 2000), peer, Duration.ofMillis(100));
         else if (clientType == ClientType.BLOCKING_CLIENT)
-            new BlockingClient(new InetSocketAddress(InetAddress.getLoopbackAddress(), 2000), peer, 100, SocketFactory.getDefault(), null);
+            new BlockingClient(new InetSocketAddress(InetAddress.getLoopbackAddress(), 2000), peer, Duration.ofMillis(100), SocketFactory.getDefault(), null);
         else
             throw new RuntimeException();
         // Claim we are connected to a different IP that what we really are, so tx confidence broadcastBy sets work
@@ -217,7 +219,7 @@ public class TestWithNetworkConnections {
         // Send a ping and wait for it to get to the other side
         CompletableFuture<Void> pingReceivedFuture = new CompletableFuture<>();
         p.mapPingFutures.put(nonce, pingReceivedFuture);
-        p.peer.sendMessage(new Ping(nonce));
+        p.peer.sendMessage(Ping.of(nonce));
         pingReceivedFuture.get();
         p.mapPingFutures.remove(nonce);
     }
@@ -226,14 +228,14 @@ public class TestWithNetworkConnections {
         // Receive a ping (that the Peer doesn't see) and wait for it to get through the socket
         final CompletableFuture<Void> pongReceivedFuture = new CompletableFuture<>();
         PreMessageReceivedEventListener listener = (p1, m) -> {
-            if (m instanceof Pong && ((Pong) m).getNonce() == nonce) {
+            if (m instanceof Pong && ((Pong) m).nonce() == nonce) {
                 pongReceivedFuture.complete(null);
                 return null;
             }
             return m;
         };
         p.peer.addPreMessageReceivedEventListener(Threading.SAME_THREAD, listener);
-        inbound(p, new Pong(nonce));
+        inbound(p, Pong.of(nonce));
         pongReceivedFuture.get();
         p.peer.removePreMessageReceivedEventListener(listener);
     }

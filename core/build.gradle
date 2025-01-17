@@ -4,42 +4,55 @@ plugins {
     id 'java-library'
     id 'com.google.protobuf'
     id 'maven-publish'
-    id 'eclipse'
 }
 
-version = '0.17-SNAPSHOT'
+version = '0.18-SNAPSHOT'
 
 dependencies {
-    api 'org.bouncycastle:bcprov-jdk15to18:1.72'
-    api 'com.google.guava:guava:31.1-android'
-    api 'com.google.protobuf:protobuf-javalite:3.21.12'
-    implementation 'org.slf4j:slf4j-api:1.7.36'
+    api project(':bitcoinj-base')
+    api 'org.bouncycastle:bcprov-jdk15to18:1.80'
+    api 'com.google.guava:guava:33.3.1-android'
+    api 'com.google.protobuf:protobuf-javalite:4.28.3'
+    implementation 'org.slf4j:slf4j-api:2.0.16'
     implementation 'net.jcip:jcip-annotations:1.0'
+
+    testImplementation project(':bitcoinj-test-support')
     testImplementation 'junit:junit:4.13.2'
-    testImplementation 'org.easymock:easymock:5.1.0'
-    testImplementation 'com.fasterxml.jackson.core:jackson-databind:2.14.0'
-    testImplementation 'org.slf4j:slf4j-jdk14:1.7.36'
-    testImplementation 'nl.jqno.equalsverifier:equalsverifier:3.11'
-    testImplementation 'org.hamcrest:hamcrest-library:2.2'
+    testImplementation 'org.easymock:easymock:5.4.0'
+    testImplementation 'com.fasterxml.jackson.core:jackson-databind:2.17.2'
+    testImplementation 'org.slf4j:slf4j-jdk14:2.0.16'
+    testImplementation 'nl.jqno.equalsverifier:equalsverifier:3.17.3'
+    testImplementation 'org.hamcrest:hamcrest-library:3.0'
     testImplementation 'pl.pragmatists:JUnitParams:1.1.1'
 }
 
-sourceCompatibility = 8
-targetCompatibility = 8
-compileJava.options.encoding = 'UTF-8'
-compileTestJava.options.encoding = 'UTF-8'
+// Prevent newer Gradle from switching to JRE version of Guava
+def gradleVersionTargetJVM = GradleVersion.version("7.0")
+if (GradleVersion.current() > gradleVersionTargetJVM) {
+    dependencies.constraints {
+        implementation("com.google.guava:guava") {
+            attributes {
+                attribute(
+                        TargetJvmEnvironment.TARGET_JVM_ENVIRONMENT_ATTRIBUTE,
+                        objects.named(TargetJvmEnvironment, TargetJvmEnvironment.ANDROID))
+            }
+        }
+    }
+}
+
+tasks.withType(JavaCompile) {
+    options.compilerArgs.addAll(['--release', '8'])
+    options.compilerArgs << '-Xlint:deprecation'
+    options.encoding = 'UTF-8'
+}
+
 javadoc.options.encoding = 'UTF-8'
 // Uncomment the following line to see all the JavaDoc warnings
 //javadoc.options.addStringOption('Xmaxwarns', '10000')
 
-compileJava {
-    options.compilerArgs.addAll(['--release', '8'])
-    options.compilerArgs << '-Xlint:deprecation'
-}
-
 protobuf {
     protoc {
-        artifact = 'com.google.protobuf:protoc:3.21.12'
+        artifact = 'com.google.protobuf:protoc:4.28.3'
     }
     generateProtoTasks {
         all().each { task ->
@@ -50,7 +63,6 @@ protobuf {
             }
         }
     }
-    generatedFilesBaseDir = new File(projectDir, '/src') // workaround for '$projectDir/src'
 }
 
 tasks.withType(Test) {
@@ -70,7 +82,7 @@ test {
 
 def gradleVersionToolchains = GradleVersion.version("6.7")
 
-if (GradleVersion.current().compareTo(gradleVersionToolchains) > 0) {
+if (GradleVersion.current() > gradleVersionToolchains) {
     // If the Gradle Java Toolchains feature is available, run tests on older JDKs
     System.err.println "Adding 'testOnJdk8' task, because ${GradleVersion.current()}"
 
@@ -97,13 +109,23 @@ jar {
     }
 }
 
+def minGradleArchiveClassifierVersion = GradleVersion.version("5.0")
+
 task javadocJar(type: Jar, dependsOn: javadoc) {
-    classifier = 'javadoc'
+    if (GradleVersion.current() > minGradleArchiveClassifierVersion) {
+        archiveClassifier.set('javadoc')
+    } else {
+        classifier = 'javadoc'
+    }
     from javadoc.destinationDir
 }
 
 task sourcesJar(type: Jar, dependsOn: classes) {
-    classifier = 'sources'
+    if (GradleVersion.current() > minGradleArchiveClassifierVersion) {
+        archiveClassifier.set('sources')
+    } else {
+        classifier = 'sources'
+    }
     from sourceSets.main.allSource
 }
 

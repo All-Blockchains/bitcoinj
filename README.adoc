@@ -1,8 +1,8 @@
 image:https://github.com/bitcoinj/bitcoinj/workflows/Java%20CI/badge.svg[GitHub Build Status,link=https://github.com/bitcoinj/bitcoinj/actions]
-image:https://gitlab.com/bitcoinj/bitcoinj/badges/master/pipeline.svg[GitLab Build Status,link=https://gitlab.com/bitcoinj/bitcoinj/pipelines]
+image:https://gitlab.com/bitcoinj/bitcoinj/badges/master/pipeline.svg[GitLab Build Status,link=https://gitlab.com/bitcoinj/bitcoinj/-/pipelines]
 image:https://coveralls.io/repos/bitcoinj/bitcoinj/badge.png?branch=master[Coverage Status,link=https://coveralls.io/r/bitcoinj/bitcoinj?branch=master]
 
-image::https://kiwiirc.com/buttons/irc.freenode.net/bitcoinj.png[Visit our IRC channel,link=https://kiwiirc.com/client/irc.freenode.net/bitcoinj]
+image::https://img.shields.io/badge/chat-Join%20bitcoinj--users%20on%20Matrix-blue[Join the bitcoinj-users Matrix room, link=https://matrix.to/#/#bitcoinj-users:matrix.org]
 
 ### Welcome to bitcoinj
 
@@ -10,10 +10,11 @@ The bitcoinj library is a Java implementation of the Bitcoin protocol, which all
 
 ### Technologies
 
-* Java 8+ (needs Java 8 API or Android 7.0 API, compiles to Java 8 bytecode) and Gradle 4.4+ for the `core` module
-* Java 11+ and Gradle 4.4+ for `tools`, `wallettool` and `examples`
-* Java 11+ and Gradle 4.10+ for the JavaFX-based `wallettemplate`
-* https://gradle.org/[Gradle] - for building the project
+* Java 8+ (needs Java 8 API or Android 8.0 API, compiles to Java 8 bytecode) for `base` and `core` module
+* Java 17+ for `tools`, `wallettool`, `examples` and the JavaFX-based `wallettemplate`
+* https://gradle.org/[Gradle]
+** Gradle 7.3+ for building the whole project or
+** Debian Gradle 4.4 for just the `base`, `core`, `tools`, `wallettool` and `examples` modules (see "reference build" below)
 * https://github.com/google/protobuf[Google Protocol Buffers] - for use with serialization and hardware communications
 
 ### Getting started
@@ -22,14 +23,12 @@ To get started, it is best to have the latest JDK and Gradle installed. The HEAD
 
 #### Building from the command line
 
-Official builds are currently using JDK 11. Our GitHub Actions build and test with JDK 11 and JDK 17.
-
-To perform a full build (_including_ JavaDocs and unit/integration _tests_) use JDK 11+.
+Official builds are currently using JDK 17. Our GitHub Actions build and test with JDK 17 and 21.
 
 ```
 gradle clean build
 ```
-If you are using Gradle 4.10 or later, the build will automatically include the JavaFX-based `wallettemplate` module. The outputs are under the `build` directory.
+The outputs are under the `build` directory.
 
 To perform a full build _without_ unit/integration _tests_ use:
 ```
@@ -59,20 +58,33 @@ To create a test net wallet file in `~/bitcoinj/bitcoinj-test.wallet`, you would
 mkdir ~/bitcoinj
 ```
 ```
-./wallettool/build/install/wallet-tool/bin/wallet-tool --net=TEST --wallet=$HOME/bitcoinj/bitcoinj-test.wallet create
+./wallettool/build/install/wallet-tool/bin/wallet-tool --net=TESTNET --wallet=$HOME/bitcoinj/bitcoinj-test.wallet create
 ```
 
 To sync the newly created wallet in `~/bitcoinj/bitcoinj-test.wallet` with the test net, you would use:
 ```
-./wallettool/build/install/wallet-tool/bin/wallet-tool --net=TEST --wallet=$HOME/bitcoinj/bitcoinj-test.wallet sync
+./wallettool/build/install/wallet-tool/bin/wallet-tool --net=TESTNET --wallet=$HOME/bitcoinj/bitcoinj-test.wallet sync
 ```
 
 To dump the state of the wallet in `~/bitcoinj/bitcoinj-test.wallet` with the test net, you would use:
 ```
-./wallettool/build/install/wallet-tool/bin/wallet-tool --net=TEST --wallet=$HOME/bitcoinj/bitcoinj-test.wallet dump
+./wallettool/build/install/wallet-tool/bin/wallet-tool --net=TESTNET --wallet=$HOME/bitcoinj/bitcoinj-test.wallet dump
 ```
 
 NOTE: These instructions are for macOS/Linux, for Windows use the `wallettool/build/install/wallet-tool/bin/wallet-tool.bat` batch file with the equivalent Windows command-line commands and options.
+
+### Building the reference build
+
+Our reference build (which is also used for our releases) is running within a container to provide good reproducibility.
+Buildah 1.26+, Podman 4.1+ and Docker (with BuildKit) are supported. We tested various combinations of host OSes
+(Debian, Ubuntu, macOS, Windows+WSL) and architectures (amd64, arm64). For usage instructions see `build.Containerfile`.
+
+This uses Debian Gradle with the `settings-debian.gradle` settings. If you happen to use Debian and have Gradle
+installed from the Debian repository, you can invoke these settings directly:
+
+```
+gradle --settings-file settings-debian.gradle clean build
+```
 
 ### Example applications
 
@@ -86,7 +98,7 @@ Now you are ready to https://bitcoinj.github.io/getting-started[follow the tutor
 
 Building apps with official releases of *bitcoinj* is covered in the https://bitcoinj.github.io/getting-started[tutorial].
 
-If you want to develop or test your app with a https://jitpack.io[Jitpack]-powered build of the latest `master` or `release-0.15` branch of *bitcoinj* follow the dynamically-generated instructions for that branch by following the correct link.
+If you want to develop or test your app with a https://jitpack.io[Jitpack]-powered build of the latest `master` or `release-0.17` branch of *bitcoinj* follow the dynamically-generated instructions for that branch by following the correct link.
 
 * https://jitpack.io/#bitcoinj/bitcoinj/master-SNAPSHOT[master] branch
-* https://jitpack.io/#bitcoinj/bitcoinj/release-0.15-SNAPSHOT[release-0.15] branch
+* https://jitpack.io/#bitcoinj/bitcoinj/release-0.17-SNAPSHOT[release-0.17] branch

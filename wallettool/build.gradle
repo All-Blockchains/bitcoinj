@@ -3,44 +3,41 @@ import org.gradle.util.GradleVersion
 plugins {
     id 'java'
     id 'application'
-    id 'eclipse'
     id 'org.asciidoctor.jvm.convert' version '3.3.2' apply false
-    id 'org.graalvm.buildtools.native' version '0.9.11' apply false
+    id 'org.graalvm.buildtools.native' version '0.10.2' apply false
 }
 
 def annotationProcessorMinVersion = GradleVersion.version("4.6")
-boolean hasAnnotationProcessor = (GradleVersion.current().compareTo(annotationProcessorMinVersion) >= 0)
+boolean hasAnnotationProcessor = GradleVersion.current() >= annotationProcessorMinVersion
 def junit5MinVersion = GradleVersion.version("4.6")
-boolean hasJunit5 = (GradleVersion.current().compareTo(junit5MinVersion) >= 0)
+boolean hasJunit5 = GradleVersion.current() >= junit5MinVersion
 
-def toolchainsMinVersion = GradleVersion.version("6.8")     // Toolchains with selection by vendor
-boolean hasToolchains = (GradleVersion.current().compareTo(toolchainsMinVersion) >= 0)
+def graalVMMinVersion = GradleVersion.version("7.4")     // Toolchains with selection by vendor
+boolean hasGraalVM = GradleVersion.current() >= graalVMMinVersion
 
 dependencies {
     implementation project(':bitcoinj-core')
-    implementation 'info.picocli:picocli:4.7.1'
-    implementation 'org.slf4j:slf4j-jdk14:1.7.36'
+    implementation 'info.picocli:picocli:4.7.6'
+    implementation 'org.slf4j:slf4j-jdk14:2.0.16'
     if (hasAnnotationProcessor) {
-        annotationProcessor 'info.picocli:picocli-codegen:4.7.1'
+        annotationProcessor 'info.picocli:picocli-codegen:4.7.6'
     } else {
-        compileOnly 'info.picocli:picocli-codegen:4.7.1'
+        compileOnly 'info.picocli:picocli-codegen:4.7.6'
     }
 
-    testImplementation "org.junit.jupiter:junit-jupiter-api:5.9.0"
-    testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:5.9.0"
+    testImplementation "org.junit.jupiter:junit-jupiter-api:5.10.3"
+    testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:5.10.3"
 
-    testImplementation 'org.slf4j:slf4j-jdk14:1.7.36'
+    testImplementation 'org.slf4j:slf4j-jdk14:2.0.16'
 }
 
-sourceCompatibility = 11
-compileJava.options.encoding = 'UTF-8'
-compileTestJava.options.encoding = 'UTF-8'
-javadoc.options.encoding = 'UTF-8'
-
-compileJava {
-    options.compilerArgs.addAll(['--release', '11'])
+tasks.withType(JavaCompile) {
+    options.compilerArgs.addAll(['--release', '17'])
     options.compilerArgs << '-Xlint:deprecation'
+    options.encoding = 'UTF-8'
 }
+
+javadoc.options.encoding = 'UTF-8'
 
 mainClassName = "org.bitcoinj.wallettool.WalletTool"
 applicationName = "wallet-tool"
@@ -76,7 +73,7 @@ asciidoctor {
     }
 }
 
-if (hasToolchains) {
+if (hasGraalVM) {
 
     apply plugin: 'org.graalvm.buildtools.native'
 
@@ -86,10 +83,6 @@ if (hasToolchains) {
                 imageName = applicationName
                 configurationFileDirectories.from(file('src/main/graal'))
                 buildArgs.add('--allow-incomplete-classpath')
-                javaLauncher = javaToolchains.launcherFor {
-                    languageVersion = JavaLanguageVersion.of(17)
-                    vendor = JvmVendorSpec.matching("GraalVM Community")
-                }
             }
         }
     }
