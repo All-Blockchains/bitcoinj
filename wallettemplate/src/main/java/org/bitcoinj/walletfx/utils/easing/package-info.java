@@ -1,5 +1,5 @@
 /*
- * Copyright 2013 Google Inc.
+ * Copyright by the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,20 +14,10 @@
  * limitations under the License.
  */
 
-package org.bitcoinj.net;
-
-import org.jspecify.annotations.Nullable;
-import java.net.InetAddress;
-
 /**
- * A factory which generates new {@link StreamConnection}s when a new connection is opened.
+ * Easing Utilities.
  */
-public interface StreamConnectionFactory {
-    /**
-     * Returns a new handler or null to have the connection close.
-     * @param inetAddress The client's (IP) address
-     * @param port The remote port on the client side
-     */
-    @Nullable
-    StreamConnection getNewConnection(InetAddress inetAddress, int port);
-}
+@NullMarked
+package org.bitcoinj.walletfx.utils.easing;
+
+import org.jspecify.annotations.NullMarked;
